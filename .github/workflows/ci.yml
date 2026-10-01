@@ -52,6 +52,9 @@ jobs:
       - name: Verify consumer scene observation
         timeout-minutes: 10
         run: npm run test:consumer
+      - name: Verify component details and transient balances
+        timeout-minutes: 10
+        run: npm run test:detail
       - name: Verify source desktop app
         timeout-minutes: 10
         run: npm run test:desktop
@@ -95,6 +98,8 @@ jobs:
             output/browser-integration/report.json
             output/browser-integration/failure.json
             output/browser-integration/*.png
+            output/detail-browser/*.json
+            output/detail-browser/*.png
             output/consumer-scene/report.json
             output/consumer-scene/*.png
             output/desktop*/result.json
