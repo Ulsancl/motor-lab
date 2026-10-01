@@ -1,0 +1,29 @@
+{
+  "name": "motor-lab",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "description": "Brushed DC motor cutaway and voltage, current and load experiments",
+  "main": "desktop/main.cjs",
+  "author": "Motor Lab",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5209 --strictPort",
+    "build": "vite build",
+    "test": "node --test tests/model.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/trace.test.mjs tests/atomic-save.test.mjs",
+    "test:browser": "node tests/browser.test.mjs",
+    "desktop": "node scripts/desktop.mjs start",
+    "package:desktop": "node scripts/desktop.mjs package",
+    "test:desktop": "node tests/desktop.test.mjs",
+    "test:consumer": "node tests/consumer-scene.test.mjs"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "playwright": "1.63.0",
+    "vite": "7.3.6"
+  }
+}

@@ -1,0 +1,6 @@
+UNLICENSED
+
+Motor Lab application source is not distributed under an open source license.
+All rights reserved.
+
+Third-party components, when included, retain their respective licenses.

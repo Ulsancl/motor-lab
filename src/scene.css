@@ -1,0 +1,14 @@
+.motor-scene { position:relative; overflow:hidden; isolation:isolate; background:#182732; touch-action:none; }
+.motor-scene > canvas { display:block; width:100%; height:100%; outline:none; }
+.motor-scene > canvas:focus-visible { outline:2px solid #8acac7; outline-offset:-3px; }
+.motor-scene-overlay { position:absolute; inset:0; pointer-events:none; z-index:2; overflow:hidden; }
+.motor-label-lines { position:absolute; inset:0; width:100%; height:100%; overflow:hidden; }
+.motor-label-lines path { fill:none; stroke:#a9bec6; stroke-width:1; opacity:.58; }
+.motor-label-lines path.is-selected { stroke:#7be1d3; opacity:.95; stroke-width:1.5; }
+.motor-part-label { position:absolute; pointer-events:auto; min-height:30px; padding:6px 8px; border:1px solid #78939f70; border-radius:5px; background:#14232bea; color:#e1eaed; font:500 11px/1.35 system-ui,sans-serif; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 8px #0003; cursor:pointer; }
+.motor-part-label:hover,.motor-part-label:focus-visible { color:#fff; border-color:#7be1d3; background:#21434a; }
+.motor-part-label.is-selected { border-color:#79d4cc; background:#1a4850ef; color:#eafffc; }
+.motor-part-label[hidden],.motor-scene-note[hidden],.motor-contact-readout[hidden] { display:none; }
+.motor-contact-readout { position:absolute; right:12px; bottom:13px; max-width:calc(100% - 24px); color:#c8ddd7; background:#142731ed; border:1px solid #4f716c; padding:7px 10px; border-radius:5px; font:500 11px/1.4 system-ui,sans-serif; text-align:right; }
+.motor-scene-note { position:absolute; bottom:49px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100% - 28px); border:1px solid #c9ad6859; border-radius:5px; padding:7px 10px; color:#ecd4a5; background:#263535ed; font:11px/1.4 system-ui,sans-serif; text-align:center; }
+@media(max-width:600px) { .motor-part-label { font-size:10px; padding:6px; } .motor-contact-readout { font-size:10px; left:10px; right:10px; text-align:center; padding:6px; } .motor-scene-note { font-size:10px; bottom:46px; } }
