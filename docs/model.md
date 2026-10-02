@@ -98,3 +98,73 @@ Snapshot은 `timeS`, `angleRad`, `omegaRadS`, `currentA`, `voltageV`, `backEmfV`
 `node --test tests/model.test.mjs`는 잠긴 축의 독립 RL 해석해와 작은 시간용 급수, 자유 회전의 독립적인 두 실지수 해 및 각 에너지 적분, 정상 상태 회로·토크 평형, 음의 회생 전류, 단락 제동, 이동 중 부하 변경을 검증한다. 긴 구간/작은 구간의 분할 비교, 5,000개 작은 구간, 총 1,000,000 s, 여러 전압·부하 변경, 저장 기록의 모순·비유한 값·변이 방지도 검사한다. 비교해는 생산 행렬 적분 코드를 다시 호출하지 않는다.
 
 이상적 일정 자속·고정 R/L/J/K, 점성 마찰과 속도 비례 부하만 포함한다. 권선 온도 변화, 열용량·과열 시간, 철손, 자기 포화, 코깅, 정류 토크 맥동, 브러시 접촉 저항·스파크, PWM·전자제어기, 실제 배터리/전원 회생 제한, Coulomb 마찰, 기계 유격은 계산하지 않는다. 3D 절개·분해는 관찰 표현이며 치수 기반 전자기 해석이나 제조·정격 판정 결과가 아니다. 실제 설치·표시 성능과 이 순수 계산 검증은 별도 검증 항목이다.
+
+## 1.1 상세 관찰의 도출값
+
+`src/detail-model.js`의 `motorDetail(state, snapshot = instantSnapshot(state))`는 위 평균 모형의 상태를 읽기만 한다. 기존 적분기·상수·상태 필드·모형 식별자 `motor-dc-average-1`과 저장 스키마는 변경하지 않는다. `state`는 기존의 엄격한 유효성 검사를 통과해야 하며, 선택적으로 넘기는 snapshot은 **같은 state의 `instantSnapshot(state)`**여야 한다. 출력은 SI 단위의 독립 객체다. 입력이나 중첩 에너지 기록을 수정하지 않는다.
+
+`describeMotorDetail(partId, state, snapshot)`은 32개 부품에 최대 6개 `{label, value, unit, digits}` 항목과 설명을 제공한다. 표시 단위로의 변환은 여기서만 하며, 각속도·전류 미분은 적용된 모형 조건에서 계산한다. 아직 적용하지 않은 입력란이나 화면 재생 배율은 이 함수의 입력이 아니다. 일시정지 중의 미분값은 그 상태에서 모형 시간을 다시 진행할 때의 순간 변화율이며, 일시정지 동안 상태나 에너지가 진행한다는 뜻이 아니다.
+
+### 전압과 토크의 부호
+
+```text
+electrical.sourceV = V
+electrical.resistiveV = Ri
+electrical.backEmfV = Keω
+electrical.inductiveV = V − Ri − Keω = Ldi/dt
+electrical.currentRateAps = (V − Ri − Keω) / L
+
+mechanical.electromagneticNm = Kti
+mechanical.frictionNm = −bω
+mechanical.loadNm = −bLω
+mechanical.constraintNm = locked ? −Kti : 0
+mechanical.netNm = Kti − bω − bLω + constraintNm
+mechanical.accelerationRadS2 = locked ? 0 : (Kti − (b+bL)ω) / J
+```
+
+토크 항은 +X 회전을 기준으로 운동식에 **더하는 부호**다. 양의 속도에서 마찰·부하 항은 음수이고 음의 속도에서는 양수다. 기존 snapshot의 `loadTorqueNm = bLω`는 운동식에서 빼는 항이므로 새 상세값 `mechanical.loadNm`과 부호가 반대다. 고정축은 속도 0과 구속반력으로 토크 합이 0이 된다. 그 반력은 실제 브래킷의 응력이나 지지점별 반력 분포가 아니다.
+
+전압 항 역시 부호를 유지한다. 회생 중 `Ri < 0`일 수 있어도 구리 손실 `Ri²`는 음수가 아니다. `electrical.rlTimeConstantS = L/R = 0.002 s`는 전기자 RL 시간 상수이며, 결합된 자유 회전 모터의 전체 응답을 단일 2 ms 지수로 설명하지 않는다.
+
+### 저장 변화와 전력 수지
+
+`power`는 기존 snapshot의 일률과 함께 다음 개별 저장 변화율을 제공한다.
+
+```text
+magneticStorageW = Li·di/dt
+kineticStorageW = Jω·dω/dt
+supplyW = copperW + frictionW + loadW + magneticStorageW + kineticStorageW
+supplyW = copperW + electromagneticW + magneticStorageW
+electromagneticW = frictionW + loadW + kineticStorageW
+```
+
+공급과 저장 변화율은 부호 있는 값이다. 양의 저장 변화율은 축적, 음수는 방출이다. 전자기 변환 `Ktiω`는 전기와 기계 사이의 내부 전달 항이므로 전체 수지의 손실·저장 항과 다시 합하지 않는다. 고정축 기동에서도 전류가 증가하는 동안에는 공급 일부가 자기장에 저장된다. 따라서 축이 멈췄다는 이유만으로 매 순간 공급 전부를 구리 손실로 표시하지 않는다. 0 V 제동에서는 공급 동력 0 W와 음의 전류·양의 구리 손실이 동시에 가능하다.
+
+`electrical.residualV`, `mechanical.residualNm`, `power.residualW`, `power.electricalResidualW`, `power.mechanicalResidualW`, `balance.energyResidualJ`는 각각 위 등식의 좌변에서 우변을 뺀 부동소수점 잔차다. 손실을 잔차로 만들어 보존식을 맞추지 않는다. 순간 동력비를 효율로 만들지 않으며, 손실·흡수 에너지에서 온도나 과열 시간을 도출하지 않는다.
+
+### 같은 조건을 유지할 때의 평형 참조
+
+자유 회전에서 `di/dt = dω/dt = 0`인 회로·토크 식의 교점은 다음과 같다.
+
+```text
+ω∞ = KtV / [R(b+bL) + KtKe]
+i∞ = (b+bL)V / [R(b+bL) + KtKe]
+```
+
+고정축에서는 `ω∞ = 0`, `i∞ = V/R`이다. `steady`는 이 회전수·전류·역기전력·전자기 토크와 공급/구리/마찰/부하 일률을 제공한다. 현재 입력을 계속 유지할 때의 평형 참조일 뿐, 현재 과도 상태를 이 값으로 대체하거나 초기화하지 않는다. 현재 전류·속도·누적 에너지를 그대로 보존하며, 도달 시간을 예측하거나 제조사 정격을 제시하지 않는다. 0 V에서는 참조값이 모두 0이지만 현재 회전과 저장 에너지는 남아 있을 수 있다.
+
+### 접촉 기하와 평균 전류의 경계
+
+정류 접촉은 기존 `GEOMETRY_SI`와 `sampleCommutation(angleRad)`를 그대로 사용한다. 각 브러시가 덮는 각 구리 편의 겹침 각도 `Δφ`에서 곡면 면적 `r·Δφ·w`를 구한다. 여기서 r은 정류자 반경, w는 브러시의 축방향 폭이다. 명목 브러시 면적은 `r·brushArcRad·w`이며, 접촉 편들의 실제 구리 면적 합에는 절연 간극을 제외한다. 예를 들어 30°의 +브러시는 S0·S1을 각각 5°씩 덮고 가운데 2°는 절연 간극이다. 점으로만 맞닿는 경계는 접촉 면적으로 세지 않는다.
+
+`contact.surfaceVelocityMps = rω`는 부호 있는 정류자 표면 속도이고, `passesPerBrushHz = 3|ω|/(2π)`는 현재 속력을 유지할 때 **브러시 하나**를 지나는 편의 빈도다. 두 브러시의 정류 사건을 합한 횟수나 전류 맥동 주파수를 해석한 값이 아니다. 접촉 면적은 압력·전기저항·전류밀도·마모·스파크를 예측하지 않는다. 모형의 R/L/K는 화면의 세 권선·예시 권수·공극에서 계산하지 않으므로 이 값들을 개별 코일에 배분하지 않는다.
+
+### 베어링의 별도 운동학
+
+베어링 순간 회전수는 장면과 같은 `motorBearingKinematics`를 사용한다. 볼 중심 궤도 반경 Rb = 5 mm, 볼 반경 rb = 0.93 mm, 외륜 고정·접촉각 0·미끄럼 없음에서 케이지 각속도는 `ωc = (1 − rb/Rb)ω/2`, 고정 좌표에서 볼 자전 각속도는 `ωball = −(Rb/rb − 1)ω/2`다. 따라서 바깥 접점 속도 `ωcRb + ωball rb = 0`, 안쪽 접점 속도 `ωcRb − ωball rb = ω(Rb−rb)`가 된다. 케이지 기준 상대 자전과 고정 좌표의 자전은 서로 다르다.
+
+`bearing`에는 `innerRpm`, `outerRpm`, `cageRpm`, `ballWorldRpm`만 제공한다. 원래 저장 위상은 한 바퀴 안의 `angleRad`여서 베어링의 누적 위상을 재구성할 수 없다. 시각적 회전 위상은 장면이 실제 `interval.angleDeltaRad`를 한 번씩 누적하며, 새 실험과 복원에서는 관찰 기준을 새로 잡는다. 상세값에 잘못된 감긴 케이지 위상이나 별도 저장 필드를 넣지 않는다. 이 운동학은 베어링 하중·탄성 접촉·유격 변화·마찰·수명·온도 해석이 아니다.
+
+### 추가 검증
+
+`tests/detail-model.test.mjs`는 독립 RL 지수해, 전류·속도·개별 저장량의 중앙 유한차분, 양/음 회전의 부호 있는 수지, 회생과 0 V 제동의 구분, 고정축 반력, 긴 시간 적분과 평형 교점, 접촉 경계와 한 바퀴 면적 적분, 베어링 두 접점의 속도를 비교한다. 32개 부품 항목의 단위·유한값·최대 개수와 원본 불변성도 검사한다. 기존 snapshot과 저장 state에 상세 출력이 섞이지 않는 계약을 유지한다.

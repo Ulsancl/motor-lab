@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 export default defineConfig({
   base: './',
-  server: { host: '127.0.0.1', port: 5209, strictPort: true },
+  server: { host: '127.0.0.1', port: 5209, strictPort: true, watch: { ignored: watchedPath => /[\\/](?:output|release)(?:[\\/]|$)/.test(watchedPath) } },
   build: { outDir: 'dist', emptyOutDir: true },
 });

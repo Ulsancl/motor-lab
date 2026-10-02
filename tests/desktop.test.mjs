@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { _electron as electron } from 'playwright';
-import { createExperiment, step } from '../src/model.js';
+import { createExperiment, reconfigureExperiment, step } from '../src/model.js';
 import { createProject, snapshotTrace } from '../src/project.js';
 
 const require = createRequire(import.meta.url);
@@ -169,6 +169,51 @@ try {
     const paused = (await state()).state; await delay(100);
     assert.deepEqual((await state()).state, paused);
     saved = await project();
+  });
+  await check('native signed voltage and torque details retain regeneration and zero-voltage braking', async () => {
+    const original = await project();
+    const fast = step(createExperiment({ voltageV: 12, loadCoefficient: 0 }), 3).state;
+    const regenerated = step(reconfigureExperiment(fast, { voltageV: 3 }), .004).state;
+    await page.evaluate(value => window.motorLab.loadProject(JSON.stringify(value)), createProject({ state: regenerated }));
+    const observed = await state();
+    assert.ok(observed.state.currentA < 0 && observed.detail.power.supplyW < 0);
+    assert.ok(Number(await page.locator('#voltage-value-resistance').getAttribute('data-value')) < 0);
+    assert.ok(Number(await page.locator('#torque-value-electromagnetic').getAttribute('data-value')) < 0);
+    assert.ok(Math.abs(observed.detail.electrical.residualV) < 1e-9);
+    await page.locator('#zero-voltage').click();
+    const zero = await state(); assert.equal(zero.detail.power.supplyW, 0);
+    assert.equal(zero.state.currentA, observed.state.currentA); assert.equal(zero.state.omegaRadS, observed.state.omegaRadS);
+    await page.evaluate(value => window.motorLab.loadProject(JSON.stringify(value)), original);
+    sameProject(await project(), original);
+  });
+  await check('focused native facts retain an explicit close camera and full observation records', async () => {
+    const original = await project();
+    await page.locator('#focus').click();
+    await page.locator('#focus-part-select').selectOption('brush-negative');
+    await page.locator('.focus-detail-panel summary').click();
+    assert.ok(await page.locator('#focus-detail-facts .detail-fact').count() > 0);
+    const selected = await state(); assert.deepEqual(selected.state, original.state); assert.deepEqual(selected.trace, original.trace); assert.deepEqual(selected.comparison, original.comparison);
+    await page.locator('#focus-part-inline').click();
+    const inspected = await project(); assert.notDeepEqual(inspected.observation.camera, original.observation.camera);
+    await page.locator('#focus').click();
+    await page.evaluate(value => window.motorLab.loadProject(JSON.stringify(value)), inspected); sameProject(await project(), inspected);
+    await page.evaluate(value => window.motorLab.loadProject(JSON.stringify(value)), original); sameProject(await project(), original);
+    saved = await project();
+  });
+  await check('saving during isolated bearing inspection preserves the original full-structure camera', async () => {
+    const original = await project();
+    await page.locator('[data-layer="housing"]').check(); await page.locator('#part-select').selectOption('bearing-front');
+    const before = await project();
+    await page.locator('#inspect-part').click(); assert.equal((await state()).inspection.id, 'bearing-front');
+    assert.notDeepEqual((await page.evaluate(() => window.motorLab.sceneDebug())).camera, before.observation.camera);
+    sameProject(await project(), before);
+    const target = path.join(evidence, 'isolated-bearing.motor.json');
+    await saveDialog(target); await page.locator('#save-project').click();
+    await waitFor(async () => !await page.locator('#save-project').isDisabled() && await fs.stat(target).then(() => true).catch(() => false), 'inspection project saved');
+    sameProject(JSON.parse(await fs.readFile(target, 'utf8')), before);
+    await page.locator('#end-inspection').click(); assert.equal((await state()).inspection, null);
+    sameProject(await project(), before);
+    await page.evaluate(value => window.motorLab.loadProject(JSON.stringify(value)), original); saved = await project();
   });
   await check('native save replaces only a complete file; BOM import retains every state field and original bytes', async () => {
     await fs.writeFile(projectPath, 'previous destination remains until complete replacement');

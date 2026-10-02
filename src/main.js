@@ -1,4 +1,7 @@
 import './style.css';
+import './detail.css';
+import { motorDetail } from './detail-model.js';
+import { renderMotorDetails } from './detail-panel.js';
 import { createExperiment, reconfigureExperiment, instantSnapshot, MAX_SIMULATION_TIME_S, MAX_STEP_SECONDS } from './model.js';
 import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW, snapshotTrace } from './project.js';
 import { advanceObservation, appendTrace } from './trace.js';
@@ -9,9 +12,11 @@ const $ = selector => document.querySelector(selector), $$ = selector => [...doc
 const STORAGE_KEY = 'motor-lab-project-v1', desktop = window.motorDesktop, TAU = Math.PI * 2;
 let state = createExperiment(), snapshot = instantSnapshot(state), trace = [snapshotTrace(state)], comparison = null;
 let view = normalizeView(DEFAULT_VIEW), playbackRate = .1, scene, initialCamera = null;
+let externalClock = false;
 let running = false, busy = false, restoring = false, focused = false, guide = null, previous = null;
 let recoveredRaw = null, storageBlocked = false, saveTimer, toastTimer, lastFrame = performance.now(), lastReadout = 0, lastAutosave = 0, inputChangedAt = 0;
 const number = (value, digits = 2) => (Math.abs(value) < .5 * 10 ** -digits ? 0 : value).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const settingNumber = value => value.toLocaleString('ko-KR', { maximumFractionDigits: 9 });
 const text = (selector, value) => { $(selector).textContent = value; };
 function quantity(selector, value, unit, digits = 2) { $(selector).replaceChildren(document.createTextNode(`${number(value, digits)} `), Object.assign(document.createElement('small'), { textContent: unit })); }
 function dismissToast() { clearTimeout(toastTimer); $('#toast').hidden = true; }
@@ -23,7 +28,7 @@ function toast(message) {
   clearTimeout(toastTimer); toastTimer = setTimeout(dismissToast, 5000);
 }
 function returnToScene() { dismissToast(); requestAnimationFrame(() => $('#scene').scrollIntoView({ block: 'nearest', inline: 'nearest' })); }
-function capture() { return createProject({ state, trace, comparison, playbackRate, view, camera: scene?.getCameraState() ?? initialCamera }); }
+function capture() { return createProject({ state, trace, comparison, playbackRate, view, camera: scene?.getProjectCameraState?.() ?? scene?.getCameraState() ?? initialCamera }); }
 function saveLocal() {
   clearTimeout(saveTimer); if (storageBlocked || restoring) return;
   try { localStorage.setItem(STORAGE_KEY, serializeProject(capture())); text('#save-status', '이 기기에 자동 저장됨'); }
@@ -51,17 +56,17 @@ function syncPlayback() {
   text('#guide-play', running ? 'Ⅱ 관찰 일시정지' : '▶ 관찰 시작');
   text('#running-indicator', running ? `관찰 재생 중 · ${number(playbackRate, playbackRate < .01 ? 3 : 2)}×` : '관찰 일시정지');
 }
-function stop() { const wasRunning = running; running = false; syncPlayback(); if (wasRunning) refresh(false); scheduleSave(); }
-function begin() { if (busy) return; if (guide?.status === 'active' && guide.stage === 1) { toast('안내의 다음 조건을 선택하거나 자유 탐구로 전환하세요.'); return; } if (state.timeS >= MAX_SIMULATION_TIME_S) { toast('시간 범위에 도달했습니다. 새 실험으로 시작하세요.'); return; } running = true; lastFrame = performance.now(); syncPlayback(); }
+function stop() { externalClock = false; const wasRunning = running; running = false; syncPlayback(); if (wasRunning) refresh(false); scheduleSave(); }
+function begin() { if (busy) return; if (guide?.status === 'active' && guide.stage === 1) { toast('안내의 다음 조건을 선택하거나 자유 탐구로 전환하세요.'); return; } if (state.timeS >= MAX_SIMULATION_TIME_S) { toast('시간 범위에 도달했습니다. 새 실험으로 시작하세요.'); return; } externalClock = false; running = true; lastFrame = performance.now(); syncPlayback(); }
 function toggle() { if (running) stop(); else begin(); }
 function syncControls(settings = false) {
   if (settings) { $('#voltage').value = state.settings.voltageV; $('#load').value = state.settings.loadCoefficient * 100000; }
-  text('#applied-settings', `적용 중: ${number(state.settings.voltageV, 1)} V · 부하 ${number(state.settings.loadCoefficient * 100000, 1)}%`);
+  text('#applied-settings', `적용 중: ${settingNumber(state.settings.voltageV)} V · 부하 ${settingNumber(state.settings.loadCoefficient * 100000)}%`);
   text('#shaft-mode', state.locked ? '고정된 축' : '자유 회전');
   $$('[data-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === view.mode)));
   $$('[data-layer]').forEach(input => { input.checked = view.layers[input.dataset.layer]; });
   $('#labels').checked = view.labels; $('#current-arrows').checked = view.currentArrows;
-  $('#explode').value = view.explode; $('#explode').disabled = view.mode !== 'exploded'; $('#part-select').value = view.selectedPart;
+  $('#explode').value = view.explode; $('#explode').disabled = view.mode !== 'exploded'; $('#part-select').value = view.selectedPart; $('#focus-part-select').value = view.selectedPart;
   const rate = $('#playback-rate'); rate.querySelector('[data-custom]')?.remove();
   if (![...rate.options].some(option => Number(option.value) === playbackRate)) { const option = document.createElement('option'); option.dataset.custom = 'true'; option.value = String(playbackRate); option.textContent = `${number(playbackRate, 3)}×`; rate.append(option); }
   rate.value = String(playbackRate);
@@ -72,15 +77,15 @@ function remember() { previous = { project: capture(), guide: structuredClone(gu
 function readProject(project, restoredGuide = null) {
   const saved = parseProject(serializeProject(project)); restoring = true;
   try {
-    stop(); ({ state, trace, comparison } = saved); ({ view, playbackRate } = saved.observation); inputChangedAt = state.timeS;
-    snapshot = instantSnapshot(state); guide = restoredGuide; syncControls(true); refresh(true);
+    scene?.endInspection?.(); stop(); ({ state, trace, comparison } = saved); ({ view, playbackRate } = saved.observation); inputChangedAt = state.timeS;
+    snapshot = instantSnapshot(state); scene?.resetRotation(state.angleRad); guide = restoredGuide; syncControls(true); refresh(true);
     if (saved.observation.camera) scene?.setCameraState(saved.observation.camera); else scene?.resetCamera();
   } finally { restoring = false; }
   saveLocal();
 }
 function newExperiment(locked = false) {
-  if (busy) return; remember(); stop(); state = createExperiment(undefined, { locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null; guide = null; inputChangedAt = 0;
-  view = normalizeView(DEFAULT_VIEW); playbackRate = locked ? .001 : .1; syncControls(true); refresh(true); scene?.resetCamera(); saveLocal();
+  if (busy) return; remember(); scene?.endInspection?.(); stop(); state = createExperiment(undefined, { locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null; guide = null; inputChangedAt = 0;
+  scene?.resetRotation(state.angleRad); view = normalizeView(DEFAULT_VIEW); playbackRate = locked ? .001 : .1; syncControls(true); refresh(true); scene?.resetCamera(); saveLocal();
   toast(locked ? '정지한 축을 고정한 새 실험입니다. 회전 중 운동 에너지를 삭제하지 않습니다.' : '정지 상태의 새 실험입니다. 직전 실험은 되돌릴 수 있습니다.');
 }
 function changeSettings(settings, { guided = false } = {}) {
@@ -100,9 +105,9 @@ const lessonInfo = {
   locked: { title: '돌지 않아도 전류가 흐를까?', voltageV: 12, loadCoefficient: 0, locked: true, rate: .001 },
 };
 function startLesson(id) {
-  if (busy || !lessonInfo[id]) return; remember(); stop(); const lesson = lessonInfo[id];
+  if (busy || !lessonInfo[id]) return; remember(); scene?.endInspection?.(); stop(); const lesson = lessonInfo[id];
   state = createExperiment({ voltageV: lesson.voltageV, loadCoefficient: lesson.loadCoefficient }, { locked: lesson.locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null;
-  inputChangedAt = 0; guide = { id, stage: 0, status: 'active', changedAt: 0, notice: '' }; playbackRate = lesson.rate;
+  scene?.resetRotation(state.angleRad); inputChangedAt = 0; guide = { id, stage: 0, status: 'active', changedAt: 0, notice: '' }; playbackRate = lesson.rate;
   $('#plot-window').value = id === 'locked' ? 'start' : 'all'; syncControls(true); refresh(true); scheduleSave();
   if (id === 'locked') scene?.resetCamera('commutator');
 }
@@ -126,7 +131,7 @@ function guideNext() {
   if (!guide || guide.status !== 'active' || guide.stage !== 1) return;
   stop();
   if (guide.id === 'startup') {
-    pinComparison('6 V · 무부하 · 3초'); guide.baseline = structuredClone(comparison); state = createExperiment({ voltageV: 12, loadCoefficient: 0 }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; inputChangedAt = 0;
+    scene?.endInspection?.(); pinComparison('6 V · 무부하 · 3초'); guide.baseline = structuredClone(comparison); state = createExperiment({ voltageV: 12, loadCoefficient: 0 }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; inputChangedAt = 0; scene?.resetRotation(state.angleRad);
   } else if (guide.id === 'load') { pinComparison('12 V · 부하 0% · 적용 직전'); guide.baseline = structuredClone(comparison); changeSettings({ loadCoefficient: .0005 }, { guided: true }); }
   guide.stage = 2; guide.changedAt = state.timeS; syncControls(true); refresh(true); saveLocal();
 }
@@ -155,7 +160,7 @@ function advance(seconds) {
   let duration = guide?.status === 'active' && guide.stage === 1 ? 0 : seconds;
   if (boundary !== null) duration = Math.min(duration, Math.max(0, boundary - state.timeS));
   duration = Math.min(duration, MAX_SIMULATION_TIME_S - state.timeS);
-  const result = advanceObservation(state, trace, duration, inputChangedAt); state = result.state; trace = result.trace; snapshot = instantSnapshot(state);
+  const result = advanceObservation(state, trace, duration, inputChangedAt); state = result.state; trace = result.trace; snapshot = instantSnapshot(state); scene?.advanceRotation(result.interval.angleDeltaRad);
   observeGuide(); if (state.timeS >= MAX_SIMULATION_TIME_S) stop(); return result;
 }
 function displayContacts() {
@@ -201,6 +206,11 @@ function refresh(renderScene = true) {
   text('#trace-info', `현재 기록 ${trace.length}개 · ${number(trace[0].timeS, 3)}—${number(trace.at(-1).timeS, 3)} s`);
   $('#clear-comparison').hidden = !comparison; $('#comparison-summary').hidden = !comparison;
   if (comparison) { const old = instantSnapshot(comparison.state); text('#comparison-summary', `흰 점선 · ${comparison.label}\n기준 ${number(old.rpm, 0)} rpm / ${number(old.currentA, 3)} A / ${number(old.backEmfV, 2)} V → 현재 ${number(snapshot.rpm, 0)} rpm / ${number(snapshot.currentA, 3)} A / ${number(snapshot.backEmfV, 2)} V`); }
+  renderMotorDetails(state, snapshot, view, motorDetail(state, snapshot));
+  const inspection = scene?.getInspection?.() ?? null;
+  $('#inspection-banner').hidden = !inspection;
+  if (inspection) text('#inspection-name', `${COMPONENTS.find(part => part.id === inspection.id)?.name ?? '베어링'} 단독 관찰 · 회전과 계산은 이어집니다`);
+  for (const selector of ['#inspect-part', '#focus-inspect-part']) $(selector).hidden = !view.selectedPart.startsWith('bearing-') || !!inspection;
   renderGuide();
 }
 function browserDownload(contents, name, mime = 'application/json;charset=utf-8') { const url = URL.createObjectURL(new Blob([contents], { type: mime })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
@@ -216,9 +226,10 @@ async function openFile() {
 }
 function toggleFocus() { focused = !focused; document.body.classList.toggle('focus-mode', focused); text('#focus', focused ? '실험 화면으로' : '3D 크게 보기'); returnToScene(); }
 
-$('#part-select').replaceChildren(...COMPONENTS.map(part => Object.assign(document.createElement('option'), { value: part.id, textContent: part.name })));
+for (const selector of ['#part-select', '#focus-part-select']) $(selector).replaceChildren(...COMPONENTS.map(part => Object.assign(document.createElement('option'), { value: part.id, textContent: part.name })));
 try {
-  scene = new MotorScene($('#scene'), { onSelect: id => { view.selectedPart = id; syncControls(); refresh(true); scheduleSave(); }, onCameraChange: scheduleSave });
+  scene = new MotorScene($('#scene'), { onSelect: selectPart, onCameraChange: scheduleSave });
+  scene.resetRotation(state.angleRad);
   if (initialCamera) scene.setCameraState(initialCamera);
 } catch (error) { $('#scene-error').hidden = false; text('#scene-error', `3D 화면을 시작하지 못했습니다. 그래픽 가속을 지원하는 환경에서 다시 실행하세요. ${error.message}`); }
 syncControls(true); refresh(true);
@@ -232,11 +243,21 @@ $('#guide-play').addEventListener('click', () => { toggle(); if (running) return
 $('#play').addEventListener('click', toggle); $('#step').addEventListener('click', () => { if (busy) return; stop(); advance(Number($('#step-duration').value)); refresh(true); saveLocal(); });
 $('#playback-rate').addEventListener('change', event => { playbackRate = normalizePlaybackRate(Number(event.target.value)); syncPlayback(); scheduleSave(); });
 $$('[data-mode]').forEach(button => button.addEventListener('click', () => { view.mode = button.dataset.mode; syncControls(); refresh(true); scheduleSave(); }));
-$$('[data-layer]').forEach(input => input.addEventListener('change', () => { view.layers[input.dataset.layer] = input.checked; refresh(true); scheduleSave(); }));
+$$('[data-layer]').forEach(input => input.addEventListener('change', () => { if (input.dataset.layer === 'housing' && !input.checked) scene?.endInspection?.(); view.layers[input.dataset.layer] = input.checked; refresh(true); scheduleSave(); }));
 $('#labels').addEventListener('change', event => { view.labels = event.target.checked; refresh(true); scheduleSave(); }); $('#current-arrows').addEventListener('change', event => { view.currentArrows = event.target.checked; refresh(true); scheduleSave(); });
 $('#explode').addEventListener('input', event => { view.explode = Number(event.target.value); refresh(true); scheduleSave(); });
-$('#part-select').addEventListener('change', event => { view.selectedPart = event.target.value; refresh(true); scheduleSave(); }); $('#focus-part').addEventListener('click', () => { scene?.focusPart(view.selectedPart); returnToScene(); });
-$$('[data-camera]').forEach(button => button.addEventListener('click', () => scene?.resetCamera(button.dataset.camera))); $('#focus').addEventListener('click', toggleFocus);
+function selectPart(id) {
+  if (scene?.getInspection?.()?.id && scene.getInspection().id !== id) scene.endInspection();
+  view.selectedPart = id; syncControls(); refresh(true); scheduleSave();
+}
+for (const selector of ['#part-select', '#focus-part-select']) $(selector).addEventListener('change', event => selectPart(event.target.value));
+for (const selector of ['#inspect-part', '#focus-inspect-part']) $(selector).addEventListener('click', () => {
+  if (!scene?.beginInspection(view.selectedPart)) { toast('이 베어링의 레이어를 켠 뒤 단독 보기를 사용하세요.'); return; }
+  refresh(false); returnToScene();
+});
+$('#end-inspection').addEventListener('click', () => { scene?.endInspection(); refresh(true); returnToScene(); });
+for (const selector of ['#focus-part', '#focus-part-inline']) $(selector).addEventListener('click', () => { scene?.endInspection?.(); if (scene?.focusPart(view.selectedPart) === false) { refresh(false); toast('이 부품의 레이어가 숨겨져 있습니다. 보이는 구조 조절에서 켜세요.'); return; } refresh(false); returnToScene(); });
+$$('[data-camera]').forEach(button => button.addEventListener('click', () => { scene?.endInspection?.(); scene?.resetCamera(button.dataset.camera); refresh(false); })); $('#focus').addEventListener('click', toggleFocus);
 $('#plot-window').addEventListener('change', () => refresh(false)); $('#pin-comparison').addEventListener('click', () => pinComparison()); $('#clear-comparison').addEventListener('click', () => { comparison = null; refresh(false); scheduleSave(); });
 $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
 $('#project-file').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file || busy) return; stop(); setBusy(true); try { if (file.size > 10 * 1024 * 1024) throw new Error('실험 파일은 10 MiB 이하여야 합니다.'); const saved = parseProject(await file.text()); remember(); readProject(saved); toast('저장한 실험을 일시정지 상태로 복원했습니다.'); } catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { event.target.value = ''; setBusy(false); } });
@@ -246,13 +267,20 @@ desktop?.onCommand(command => { if (busy) return; if (command === 'new-project')
 window.addEventListener('keydown', event => { if (event.code !== 'Space' || event.repeat || event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.target.isContentEditable || event.target.closest('input,select,textarea,button,summary,dialog,[contenteditable=true]')) return; event.preventDefault(); toggle(); });
 window.addEventListener('beforeunload', saveLocal); document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); saveLocal(); } });
 window.motorLab = {
-  getState: () => structuredClone({ state, snapshot, view, playbackRate, running, trace, comparison }),
+  getState: () => structuredClone({ state, snapshot, view, playbackRate, running, trace, comparison, focused, inspection: scene?.getInspection?.() ?? null, detail: motorDetail(state, snapshot) }),
   project: () => structuredClone(capture()), loadProject: contents => { const saved = parseProject(contents); readProject(saved); return structuredClone(capture()); },
   step: seconds => { stop(); advance(seconds); refresh(true); saveLocal(); return structuredClone({ state, snapshot }); },
-  sceneDebug: () => scene?.getDebug() ?? null, guide: () => structuredClone(guide),
+  components: () => structuredClone(COMPONENTS), sceneDebug: () => scene?.getDebug() ?? null, guide: () => structuredClone(guide),
+};
+window.render_game_to_text = () => JSON.stringify({ ...window.motorLab.getState(), coordinates: { units: 'SI', axis: '+X is the rotor axis; positive angle follows the right-hand rule', contact: 'brushes fixed; commutator rotates at model angle' } });
+window.advanceTime = milliseconds => {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 60000) throw new RangeError('Invalid external clock interval');
+  externalClock = true;
+  if (running && !busy) advance(milliseconds / 1000 * playbackRate);
+  refresh(true); lastFrame = performance.now(); return window.motorLab.getState();
 };
 function frame(now) {
-  if (running && !busy) {
+  if (running && !busy && !externalClock) {
     try {
       const elapsed = Math.max(0, now - lastFrame) / 1000 * playbackRate;
       if (elapsed > MAX_STEP_SECONDS) { stop(); toast('긴 대기 후 실험을 일시정지했습니다. 재생으로 이어가세요.'); }
