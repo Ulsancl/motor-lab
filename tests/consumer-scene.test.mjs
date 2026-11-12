@@ -31,7 +31,12 @@ async function selectedLabel(id) {
   const name = COMPONENTS.find(part => part.id === id).name;
   const label = page.locator('.motor-part-label.is-selected', { hasText: name });
   assert.ok(await label.isVisible(), `${id} selected label is absent`);
-  const sceneBox = await page.locator('#scene').boundingBox(), labelBox = await label.boundingBox();
+  // Focusing schedules scrollIntoView on the next paint. Measure both boxes
+  // atomically so scrolling between two browser calls cannot mix coordinates.
+  const { sceneBox, labelBox } = await label.evaluate(element => ({
+    sceneBox: document.querySelector('#scene').getBoundingClientRect().toJSON(),
+    labelBox: element.getBoundingClientRect().toJSON(),
+  }));
   assert.ok(labelBox.x >= sceneBox.x && labelBox.x + labelBox.width <= sceneBox.x + sceneBox.width + .01);
   assert.ok(labelBox.y >= sceneBox.y + 45 && labelBox.y + labelBox.height <= sceneBox.y + sceneBox.height - 35);
   assert.ok((await debug()).labels.length <= 4, 'focus labels should remain limited');
