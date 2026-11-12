@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { COMPONENTS, GEOMETRY_SI } from '../src/geometry.js';
 // Focused real-browser acceptance for consumer part observation, not a second
 // physics or installer suite. Run serially with the other GPU/native checks.
 const root = path.resolve(import.meta.dirname, '..');
-const output = path.join(root, 'output/consumer-scene');
+const output = artifactDirectory(root, path.join(root, 'output/consumer-scene'));
 await fs.mkdir(output, { recursive: true });
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 5212, strictPort: true, hmr: false } });
 const hardware = process.env.MOTOR_BROWSER_HARDWARE === '1';
@@ -30,7 +31,12 @@ async function selectedLabel(id) {
   const name = COMPONENTS.find(part => part.id === id).name;
   const label = page.locator('.motor-part-label.is-selected', { hasText: name });
   assert.ok(await label.isVisible(), `${id} selected label is absent`);
-  const sceneBox = await page.locator('#scene').boundingBox(), labelBox = await label.boundingBox();
+  // Focusing schedules scrollIntoView on the next paint. Measure both boxes
+  // atomically so scrolling between two browser calls cannot mix coordinates.
+  const { sceneBox, labelBox } = await label.evaluate(element => ({
+    sceneBox: document.querySelector('#scene').getBoundingClientRect().toJSON(),
+    labelBox: element.getBoundingClientRect().toJSON(),
+  }));
   assert.ok(labelBox.x >= sceneBox.x && labelBox.x + labelBox.width <= sceneBox.x + sceneBox.width + .01);
   assert.ok(labelBox.y >= sceneBox.y + 45 && labelBox.y + labelBox.height <= sceneBox.y + sceneBox.height - 35);
   assert.ok((await debug()).labels.length <= 4, 'focus labels should remain limited');
