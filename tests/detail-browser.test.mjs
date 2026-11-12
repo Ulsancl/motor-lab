@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,7 +9,8 @@ import { createProject } from '../src/project.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
-const output = path.join(root, 'output', 'detail-browser'), address = 'http://127.0.0.1:5253';
+const output = artifactDirectory(root, path.join(root, 'output', 'detail-browser'));
+const address = 'http://127.0.0.1:5253';
 const checks = [], errors = [], evidence = [], externalRequests = [];
 const TAU = 2 * Math.PI, R = 2, L = .004, K = .04, J = .0004, B = .00002;
 let server, browser, context, page;

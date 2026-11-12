@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { COMPONENTS, GEOMETRY_SI } from '../src/geometry.js';
 // Focused real-browser acceptance for consumer part observation, not a second
 // physics or installer suite. Run serially with the other GPU/native checks.
 const root = path.resolve(import.meta.dirname, '..');
-const output = path.join(root, 'output/consumer-scene');
+const output = artifactDirectory(root, path.join(root, 'output/consumer-scene'));
 await fs.mkdir(output, { recursive: true });
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 5212, strictPort: true, hmr: false } });
 const hardware = process.env.MOTOR_BROWSER_HARDWARE === '1';

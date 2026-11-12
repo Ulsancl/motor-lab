@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +8,8 @@ import { createExperiment, step, reconfigureExperiment } from '../src/model.js';
 import { createProject, serializeProject } from '../src/project.js';
 import { sampleCommutation } from '../src/geometry.js';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'output/browser-integration');
+const root = path.resolve(import.meta.dirname, '..');
+const output = artifactDirectory(root, path.join(root, 'output/browser-integration'));
 await fs.mkdir(output, { recursive: true });
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 5210, strictPort: true } }); await server.listen();
 const hardware = process.env.MOTOR_BROWSER_HARDWARE === '1';
