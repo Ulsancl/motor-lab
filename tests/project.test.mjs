@@ -1,3 +1,4 @@
+import { archiveOriginal } from '../src/recovery.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createExperiment, reconfigureExperiment, step, instantSnapshot } from '../src/model.js';
@@ -132,4 +133,34 @@ test('live invalid input creates coherent rest state without fabricating energy 
   assert.equal(result.observation.playbackRate, 1); assert.deepEqual(parseProject(serializeProject(result)), result);
   assert.equal(normalizePlaybackRate(.0001), .001); assert.equal(normalizePlaybackRate(5), 4);
   assert.equal(normalizeView({ selectedPart: 'unknown', explode: 3 }).selectedPart, DEFAULT_VIEW.selectedPart);
+});
+
+test('recovery reuses exact legacy backups and never overwrites a different original', t => {
+  t.mock.method(Date, 'now', () => 1000);
+  const records = new Map([['experiment', 'protected primary'], ['experiment-original-1000', 'older original']]);
+  const storage = {
+    get length() { return records.size; },
+    key: index => [...records.keys()][index],
+    getItem: key => records.get(key) ?? null,
+    setItem: (key, raw) => records.set(key, raw),
+  };
+  archiveOriginal(storage, 'experiment', 'older original');
+  archiveOriginal(storage, 'experiment', '\ufeffnew original');
+  archiveOriginal(storage, 'experiment', '\ufeffnew original');
+  assert.deepEqual([...records], [
+    ['experiment', 'protected primary'], ['experiment-original-1000', 'older original'],
+    ['experiment-original-1001', '\ufeffnew original'],
+  ]);
+});
+
+test('locked-shaft history applies the same Vmax/R current bound to both saved traces', () => {
+  const state = step(createExperiment({ voltageV: 12 }, { locked: true }), .1).state;
+  const end = snapshotTrace(state), baseline = createProject({ state, trace: [end], comparison: { label: '고정축', state, trace: [end] } });
+  for (const comparison of [false, true]) {
+    const file = structuredClone(baseline), samples = (comparison ? file.comparison : file).trace;
+    samples.unshift({ ...end, timeS: .05, currentA: 6 });
+    assert.equal(parseProject(JSON.stringify(file)).state.locked, true);
+    samples[0].currentA = 7;
+    assert.throws(() => parseProject(JSON.stringify(file)), error => error.code === 'INVALID_TRACE');
+  }
 });
