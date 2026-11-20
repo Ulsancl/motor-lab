@@ -1,4 +1,4 @@
-import { MODEL_VERSION, normalizeSettings, createExperiment, instantSnapshot, assertValidState,
+import { MODEL_VERSION, normalizeSettings, createExperiment, instantSnapshot, assertValidState, validLockedCurrent,
   MOTOR_CONSTANTS_SI, SETTINGS_LIMITS_SI, STATE_LIMITS_SI } from './model.js';
 import { DEFAULT_VIEW, COMPONENTS } from './geometry.js';
 
@@ -105,7 +105,7 @@ function savedTrace(value, state) {
     // Samples contain no energy ledger: only complete saved states go through
     // the model's energy validator. Do not invent a historical ledger here.
     if (sample.timeS === 0 && (sample.currentA !== 0 || sample.omegaRadS !== 0)) fail('새 실험의 첫 표본은 정지 상태여야 합니다.', 'INVALID_TRACE');
-    if (state.locked && (sample.omegaRadS !== 0 || sample.currentA < 0)) fail('고정축 그래프의 운동 또는 전류가 일치하지 않습니다.', 'INVALID_TRACE');
+    if (state.locked && (sample.omegaRadS !== 0 || !validLockedCurrent(sample.currentA))) fail('고정축 그래프의 운동 또는 전류가 일치하지 않습니다.', 'INVALID_TRACE');
   }
   const current = snapshotTrace(state), last = value.at(-1);
   if (sampleKeys.some(key => last[key] !== current[key])) fail('그래프의 마지막 표본이 현재 실험 상태와 다릅니다.', 'INVALID_TRACE');

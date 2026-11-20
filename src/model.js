@@ -48,6 +48,11 @@ function numberIn(value, min, max, label, exclusiveMax = false) {
   if (value < min || (exclusiveMax ? value >= max : value > max)) throw new RangeError(`${label}: outside supported range`);
 }
 
+// A fixed shaft has no back EMF: from rest, every permitted voltage keeps
+// RL current between zero and Vmax/R. Allow numerical integration roundoff.
+export const validLockedCurrent = current => finite(current) && current >= 0
+  && current <= SETTINGS_LIMITS_SI.voltageV.max / R + 5e-10;
+
 function validSettings(value) {
   exactKeys(value, SETTINGS_KEYS, 'settings');
   for (const key of SETTINGS_KEYS) numberIn(value[key], SETTINGS_LIMITS_SI[key].min, SETTINGS_LIMITS_SI[key].max, `settings.${key}`);
@@ -118,7 +123,7 @@ export function assertValidState(state) {
   if (Math.abs(state.energyJ.supply) > inputBound + tolerance || losses > inputBound + tolerance) throw new RangeError('state: accumulated energy exceeds time/input bound');
   if (Math.abs(state.energyJ.supply - losses - stored) > tolerance) throw new RangeError('state: cumulative energy does not balance stored energy and losses');
   if (state.timeS === 0 && (state.currentA !== 0 || state.omegaRadS !== 0 || ENERGY_KEYS.some(key => state.energyJ[key] !== 0))) throw new RangeError('state: an experiment starts from rest with zero energy');
-  if (state.locked && (state.omegaRadS !== 0 || state.currentA < 0 || state.currentA > 6 + 5e-10 || state.energyJ.friction !== 0 || state.energyJ.load !== 0)) throw new RangeError('state: inconsistent locked shaft');
+  if (state.locked && (state.omegaRadS !== 0 || !validLockedCurrent(state.currentA) || state.energyJ.friction !== 0 || state.energyJ.load !== 0)) throw new RangeError('state: inconsistent locked shaft');
   return state;
 }
 

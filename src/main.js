@@ -1,3 +1,4 @@
+import { archiveOriginal } from './recovery.js';
 import './style.css';
 import './detail.css';
 import { motorDetail } from './detail-model.js';
@@ -37,7 +38,7 @@ function saveLocal() {
 function scheduleSave() { if (!restoring && !storageBlocked) { clearTimeout(saveTimer); saveTimer = setTimeout(saveLocal, 220); } }
 function protectOriginal(raw, future) {
   recoveredRaw = raw; storageBlocked = true;
-  try { localStorage.setItem(`${STORAGE_KEY}-original-${Date.now()}`, raw); } catch { /* Keep the primary original. */ }
+  try { archiveOriginal(localStorage, STORAGE_KEY, raw); } catch { /* Keep the primary original. */ }
   $('#storage-recovery').hidden = false;
   if (future) text('#storage-recovery strong', '더 새로운 버전의 관찰 기록입니다. 원문을 보존합니다.');
   text('#save-status', '자동 저장 원문 보호 중 · 현재 실험은 파일로 보관하세요');
@@ -77,14 +78,14 @@ function remember() { previous = { project: capture(), guide: structuredClone(gu
 function readProject(project, restoredGuide = null) {
   const saved = parseProject(serializeProject(project)); restoring = true;
   try {
-    scene?.endInspection?.(); stop(); ({ state, trace, comparison } = saved); ({ view, playbackRate } = saved.observation); inputChangedAt = state.timeS;
+    scene?.endInspection?.(); stop(); ({ state, trace, comparison } = saved); ({ view, playbackRate, camera: initialCamera } = saved.observation); inputChangedAt = state.timeS;
     snapshot = instantSnapshot(state); scene?.resetRotation(state.angleRad); guide = restoredGuide; syncControls(true); refresh(true);
-    if (saved.observation.camera) scene?.setCameraState(saved.observation.camera); else scene?.resetCamera();
+    if (initialCamera) scene?.setCameraState(initialCamera); else scene?.resetCamera();
   } finally { restoring = false; }
   saveLocal();
 }
 function newExperiment(locked = false) {
-  if (busy) return; remember(); scene?.endInspection?.(); stop(); state = createExperiment(undefined, { locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null; guide = null; inputChangedAt = 0;
+  if (busy) return; remember(); scene?.endInspection?.(); stop(); initialCamera = null; state = createExperiment(undefined, { locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null; guide = null; inputChangedAt = 0;
   scene?.resetRotation(state.angleRad); view = normalizeView(DEFAULT_VIEW); playbackRate = locked ? .001 : .1; syncControls(true); refresh(true); scene?.resetCamera(); saveLocal();
   toast(locked ? '정지한 축을 고정한 새 실험입니다. 회전 중 운동 에너지를 삭제하지 않습니다.' : '정지 상태의 새 실험입니다. 직전 실험은 되돌릴 수 있습니다.');
 }
@@ -109,7 +110,7 @@ function startLesson(id) {
   state = createExperiment({ voltageV: lesson.voltageV, loadCoefficient: lesson.loadCoefficient }, { locked: lesson.locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null;
   scene?.resetRotation(state.angleRad); inputChangedAt = 0; guide = { id, stage: 0, status: 'active', changedAt: 0, notice: '' }; playbackRate = lesson.rate;
   $('#plot-window').value = id === 'locked' ? 'start' : 'all'; syncControls(true); refresh(true); scheduleSave();
-  if (id === 'locked') scene?.resetCamera('commutator');
+  if (id === 'locked') { initialCamera = null; scene?.resetCamera('commutator'); }
 }
 function guideBoundary() {
   if (!guide || guide.status !== 'active') return null;

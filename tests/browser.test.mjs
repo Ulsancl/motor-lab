@@ -138,6 +138,30 @@ try {
     await page.reload(); await page.waitForFunction(() => window.motorLab?.sceneDebug()?.ready); assert.deepEqual((await project()).state, saved.state); assert.deepEqual((await project()).trace, saved.trace);
     const before = await project(); for (const raw of ['{bad JSON', JSON.stringify({ ...before, schemaVersion: 99 })]) { const message = await page.evaluate(text => { try { window.motorLab.loadProject(text); return ''; } catch (e) { return e.message; } }, raw); assert.ok(message.includes('원본')); assert.deepEqual((await project()).state, before.state); }
   });
+  await check('without WebGL, open and undo preserve the file camera but a new experiment clears it', async () => {
+    const fallback = await browser.newPage();
+    try {
+      await fallback.addInitScript(() => {
+        const getContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+          return /webgl/i.test(type) ? null : getContext.call(this, type, ...args);
+        };
+      });
+      await fallback.goto(page.url());
+      await fallback.waitForFunction(() => !!window.motorLab && !document.querySelector('#scene-error').hidden);
+      const camera = { position: [1, .25, .5], target: [0, 0, 0], zoom: 1.5 };
+      const result = await fallback.evaluate(camera => {
+        const api = window.motorLab, project = api.project();
+        project.observation.camera = camera;
+        const imported = api.loadProject(JSON.stringify(project)).observation.camera;
+        document.querySelector('#new-project').click();
+        const fresh = api.project().observation.camera;
+        document.querySelector('#undo-new').click();
+        return [imported, fresh, api.project().observation.camera];
+      }, camera);
+      assert.deepEqual(result, [camera, null, camera]);
+    } finally { await fallback.close(); }
+  });
   await check('future automatic-save originals remain byte-for-byte protected and exportable', async () => {
     const isolated = await browser.newContext({ viewport: { width: 1200, height: 900 }, acceptDownloads: true });
     const other = await isolated.newPage(); watch(other); const raw = '\ufeff{"type":"motor-lab-project","schemaVersion":99,"untouched":"한글"}';
