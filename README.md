@@ -4,7 +4,7 @@
 
 정식 **[1.1.0 릴리스](https://github.com/Ulsancl/motor-lab/releases/tag/v1.1.0)**는 부품 구조와 전압·토크·에너지 상세 관찰을 개선한 버전입니다.
 
-[1.1.0 릴리스](https://github.com/Ulsancl/motor-lab/releases/tag/v1.1.0)에서 `Motor-Lab-Setup-1.1.0.exe`와 동명 `.sha256` 파일을 받습니다. 설치 후 바탕화면의 **Motor Lab** 아이콘으로 시작하세요. 1.0.0의 설치·업데이트 검증은 당시 기록이며, 1.1.0의 검사 범위와 실행 환경은 새 릴리스 설명을 따릅니다.
+[1.1.1 릴리스](https://github.com/Ulsancl/motor-lab/releases/tag/v1.1.1)에서 `Motor-Lab-Setup-1.1.1.exe`와 동명 `.sha256` 파일을 받습니다. 설치 후 바탕화면의 **Motor Lab** 아이콘으로 시작하세요. 1.0.0의 설치·업데이트 검증은 당시 기록이며, 1.1.1의 검사 범위와 실행 환경은 새 릴리스 설명을 따릅니다.
 
 ![Motor Lab의 절개 구조와 전류·회전 관찰 화면](docs/assets/motor-lab.png)
 
