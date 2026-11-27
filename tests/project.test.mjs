@@ -22,6 +22,21 @@ function invalid(change, code) {
   assert.throws(() => parseProject(raw), error => error instanceof ProjectError && error.preserveOriginal && (!code || error.code === code));
   assert.deepEqual(original, before); assert.equal(JSON.stringify(imported), raw);
 }
+test('preflight bounds preserve full-length traces and escaped labels', () => {
+  const project = example();
+  project.trace = Array(MAX_TRACE_SAMPLES).fill(project.trace.at(-1));
+  project.comparison.trace = Array(MAX_TRACE_SAMPLES).fill(project.comparison.trace.at(-1));
+  project.comparison.label = '원문 ["비교", "\\\\"]';
+  assert.deepEqual(parseProject(serializeProject(project)), project);
+  for (const fixture of [
+    { list: Array(1025).fill(null) },
+    { grouped: Array.from({ length: 13 }).reduce(value => [value], null) },
+    Object.fromEntries(Array.from({ length: 15001 }, (_, n) => ['field' + n, 0])),
+  ]) {
+    assert.throws(() => parseProject(JSON.stringify(fixture)), { code: 'PROJECT_STRUCTURE_LIMIT' });
+  }
+});
+
 function roundTrip(state) {
   const saved = createProject({ state }), original = clone(state), raw = serializeProject(saved), restored = parseProject(raw);
   assert.deepEqual(restored, saved); assert.equal(serializeProject(restored), raw);

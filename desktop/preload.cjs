@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('motorDesktop', {
   isDesktop: true,
   openProject: () => ipcRenderer.invoke('motor:open-project'),
   saveProject: payload => ipcRenderer.invoke('motor:save-project', payload),
+  exportOriginal: contents => ipcRenderer.invoke('motor:export-original', contents),
   setBusy: busy => ipcRenderer.send('motor:busy', busy === true),
   onCommand: callback => {
     if (typeof callback !== 'function') throw new TypeError('A callback is required');

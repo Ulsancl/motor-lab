@@ -30,6 +30,16 @@ const near = (a, b, tolerance = 1e-9) => assert.ok(Math.abs(a - b) <= tolerance,
 let gpu, failure;
 try {
   await page.goto('http://127.0.0.1:5210/'); await page.waitForFunction(() => window.motorLab?.sceneDebug()?.ready);
+  await check('dev server does not serve generated diagnostics as static files or source imports', async () => {
+    const diagnostic = path.join(output, 'dev-access-fixture.txt');
+    await fs.writeFile(diagnostic, 'synthetic diagnostic');
+    const url = new URL(path.relative(root, diagnostic).split(path.sep).join('/'), 'http://127.0.0.1:5210/');
+    for (const suffix of ['', '?raw']) {
+      const response = await fetch(url.href + suffix);
+      assert.equal(response.status, 403);
+      assert.doesNotMatch(await response.text(), /synthetic diagnostic/);
+    }
+  });
   await check('32-part cutaway starts paused with offline assets and a real WebGL scene', async () => {
     const initial = await current(), debug = await page.evaluate(() => window.motorLab.sceneDebug());
     assert.equal(initial.running, false); assert.equal(initial.state.timeS, 0); assert.equal(debug.componentCount, 32);
