@@ -3,8 +3,8 @@ import { GEOMETRY_SI, sampleCommutation, TAU } from './geometry.js';
 import { motorBearingKinematics } from './mechanical-geometry.js';
 
 const zero = value => Object.is(value, -0) ? 0 : value;
-const { resistanceOhm: R, inductanceH: L, torqueConstantNmPerA: Kt,
-  backEmfConstantVsPerRad: Ke, inertiaKgM2: J, frictionCoefficient: B } = MOTOR_CONSTANTS_SI;
+const { inductanceH: L, torqueConstantNmPerA: Kt,
+  backEmfConstantVsPerRad: Ke, frictionCoefficient: B } = MOTOR_CONSTANTS_SI;
 
 /** Read-only observations of the existing average DC model, in SI units.
  * A supplied snapshot must be instantSnapshot(state) for this same state.
@@ -13,6 +13,7 @@ const { resistanceOhm: R, inductanceH: L, torqueConstantNmPerA: Kt,
 export function motorDetail(state, snapshot = instantSnapshot(state)) {
   assertValidState(state);
   const { currentA: i, omegaRadS: w, settings: { voltageV: voltage, loadCoefficient: load }, locked } = state;
+  const { resistanceOhm: R, inertiaKgM2: J } = snapshot;
   const resistiveV = zero(R * i), backEmfV = zero(Ke * w);
   const inductiveV = zero(voltage - resistiveV - backEmfV);
   const currentRateAps = zero(inductiveV / L);

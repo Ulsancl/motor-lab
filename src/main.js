@@ -1,9 +1,10 @@
 import { archiveOriginal } from './recovery.js';
 import './style.css';
+import './experiment-controls.css';
 import './detail.css';
 import { motorDetail } from './detail-model.js';
 import { renderMotorDetails } from './detail-panel.js';
-import { createExperiment, reconfigureExperiment, instantSnapshot, MAX_SIMULATION_TIME_S, MAX_STEP_SECONDS } from './model.js';
+import { createExperiment, reconfigureExperiment, instantSnapshot, MOTOR_CONSTANTS_SI, MAX_SIMULATION_TIME_S, MAX_STEP_SECONDS } from './model.js';
 import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW, snapshotTrace } from './project.js';
 import { advanceObservation, appendTrace } from './trace.js';
 import { COMPONENTS, sampleCommutation } from './geometry.js';
@@ -74,20 +75,48 @@ function syncControls(settings = false) {
   $$('[data-lesson]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.lesson === guide?.id)));
   syncPlayback();
 }
+function syncMotorControls() {
+  $('#resistance').value = snapshot.resistanceOhm;
+  $('#inertia').value = snapshot.inertiaKgM2 * 1000;
+  text('#applied-motor-settings', `적용 중 R ${settingNumber(snapshot.resistanceOhm)} Ω · J ${settingNumber(snapshot.inertiaKgM2 * 1000)} g·m²`);
+}
+function motorSettings(resistanceOhm, inertiaKgM2) {
+  const settings = {};
+  if (resistanceOhm !== MOTOR_CONSTANTS_SI.resistanceOhm) settings.resistanceOhm = resistanceOhm;
+  if (inertiaKgM2 !== MOTOR_CONSTANTS_SI.inertiaKgM2) settings.inertiaKgM2 = inertiaKgM2;
+  return settings;
+}
 function remember() { previous = { project: capture(), guide: structuredClone(guide), inputChangedAt }; $('#undo-new').hidden = false; }
 function readProject(project, restoredGuide = null) {
   const saved = parseProject(serializeProject(project)); restoring = true;
   try {
     scene?.endInspection?.(); stop(); ({ state, trace, comparison } = saved); ({ view, playbackRate, camera: initialCamera } = saved.observation); inputChangedAt = state.timeS;
-    snapshot = instantSnapshot(state); scene?.resetRotation(state.angleRad); guide = restoredGuide; syncControls(true); refresh(true);
+    snapshot = instantSnapshot(state); scene?.resetRotation(state.angleRad); guide = restoredGuide; syncControls(true); syncMotorControls(); refresh(true);
     if (initialCamera) scene?.setCameraState(initialCamera); else scene?.resetCamera();
   } finally { restoring = false; }
   saveLocal();
 }
+function resetRun(settings, locked) {
+  state = createExperiment(settings, { locked });
+  snapshot = instantSnapshot(state);
+  trace = [snapshotTrace(state)];
+  guide = null;
+  inputChangedAt = 0;
+  scene?.resetRotation(state.angleRad);
+}
 function newExperiment(locked = false) {
-  if (busy) return; remember(); scene?.endInspection?.(); stop(); initialCamera = null; state = createExperiment(undefined, { locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null; guide = null; inputChangedAt = 0;
-  scene?.resetRotation(state.angleRad); view = normalizeView(DEFAULT_VIEW); playbackRate = locked ? .001 : .1; syncControls(true); refresh(true); scene?.resetCamera(); saveLocal();
+  if (busy) return; remember(); scene?.endInspection?.(); stop(); initialCamera = null;
+  const settings = locked ? motorSettings(snapshot.resistanceOhm, snapshot.inertiaKgM2) : undefined;
+  resetRun(settings, locked); comparison = null;
+  view = normalizeView(DEFAULT_VIEW); playbackRate = locked ? .001 : .1; syncControls(true); syncMotorControls(); refresh(true); scene?.resetCamera(); saveLocal();
   toast(locked ? '정지한 축을 고정한 새 실험입니다. 회전 중 운동 에너지를 삭제하지 않습니다.' : '정지 상태의 새 실험입니다. 직전 실험은 되돌릴 수 있습니다.');
+}
+function restartWithMotorSettings(resistanceOhm, inertiaKgM2) {
+  remember(); scene?.endInspection?.(); stop();
+  const { voltageV, loadCoefficient } = state.settings;
+  resetRun({ voltageV, loadCoefficient, ...motorSettings(resistanceOhm, inertiaKgM2) }, state.locked);
+  syncControls(true); syncMotorControls(); refresh(true); saveLocal();
+  toast('설정한 저항과 관성으로 새 실험을 시작했습니다.');
 }
 function changeSettings(settings, { guided = false } = {}) {
   if (busy) return; const before = state;
@@ -98,7 +127,12 @@ function changeSettings(settings, { guided = false } = {}) {
   }
   syncControls(true); refresh(true); scheduleSave();
 }
-function pinComparison(label) { comparison = { label: label || `${number(state.settings.voltageV, 1)} V · 부하 ${number(state.settings.loadCoefficient * 100000, 0)}% · ${number(state.timeS, 3)} s`, state: structuredClone(state), trace: structuredClone(trace) }; refresh(true); scheduleSave(); }
+function pinComparison(label) {
+  const conditions = `${number(state.settings.voltageV, 1)} V · 부하 ${number(state.settings.loadCoefficient * 100000, 0)}% · ${number(state.timeS, 3)} s`;
+  const motor = `R ${settingNumber(snapshot.resistanceOhm)} Ω · J ${settingNumber(snapshot.inertiaKgM2 * 1000)} g·m²`;
+  comparison = { label: label || `${conditions} · ${motor}`, state: structuredClone(state), trace: structuredClone(trace) };
+  refresh(true); scheduleSave();
+}
 
 const lessonInfo = {
   startup: { title: '전압이 두 배가 되면?', voltageV: 6, loadCoefficient: 0, locked: false, rate: 1 },
@@ -109,7 +143,7 @@ function startLesson(id) {
   if (busy || !lessonInfo[id]) return; remember(); scene?.endInspection?.(); stop(); const lesson = lessonInfo[id];
   state = createExperiment({ voltageV: lesson.voltageV, loadCoefficient: lesson.loadCoefficient }, { locked: lesson.locked }); snapshot = instantSnapshot(state); trace = [snapshotTrace(state)]; comparison = null;
   scene?.resetRotation(state.angleRad); inputChangedAt = 0; guide = { id, stage: 0, status: 'active', changedAt: 0, notice: '' }; playbackRate = lesson.rate;
-  $('#plot-window').value = id === 'locked' ? 'start' : 'all'; syncControls(true); refresh(true); scheduleSave();
+  $('#plot-window').value = id === 'locked' ? 'start' : 'all'; syncControls(true); syncMotorControls(); refresh(true); scheduleSave();
   if (id === 'locked') { initialCamera = null; scene?.resetCamera('commutator'); }
 }
 function guideBoundary() {
@@ -233,8 +267,13 @@ try {
   scene.resetRotation(state.angleRad);
   if (initialCamera) scene.setCameraState(initialCamera);
 } catch (error) { $('#scene-error').hidden = false; text('#scene-error', `3D 화면을 시작하지 못했습니다. 그래픽 가속을 지원하는 환경에서 다시 실행하세요. ${error.message}`); }
-syncControls(true); refresh(true);
+syncControls(true); syncMotorControls(); refresh(true);
 $('#settings-form').addEventListener('submit', event => { event.preventDefault(); if (busy || !event.currentTarget.reportValidity()) return; changeSettings({ voltageV: Number($('#voltage').value), loadCoefficient: Number($('#load').value) / 100000 }); toast('전류·속도를 유지한 채 새 조건을 적용했습니다.'); });
+$('#motor-settings-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (busy || !event.currentTarget.reportValidity()) return;
+  restartWithMotorSettings($('#resistance').valueAsNumber, $('#inertia').valueAsNumber / 1000);
+});
 $('#zero-voltage').addEventListener('click', () => changeSettings({ voltageV: 0 }));
 $('#new-locked').addEventListener('click', () => newExperiment(true)); $('#new-project').addEventListener('click', () => newExperiment());
 $('#undo-new').addEventListener('click', () => { if (!previous || busy) return; const saved = previous; previous = null; readProject(saved.project, saved.guide); inputChangedAt = saved.inputChangedAt; $('#undo-new').hidden = true; toast('직전 실험과 안내를 복원했습니다.'); });

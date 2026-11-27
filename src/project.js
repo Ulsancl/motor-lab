@@ -1,5 +1,5 @@
 import { MODEL_VERSION, normalizeSettings, createExperiment, instantSnapshot, assertValidState, validLockedCurrent,
-  MOTOR_CONSTANTS_SI, SETTINGS_LIMITS_SI, STATE_LIMITS_SI } from './model.js';
+  MOTOR_CONSTANTS_SI, SETTINGS_LIMITS_SI, stateMotionLimits } from './model.js';
 import { DEFAULT_VIEW, COMPONENTS } from './geometry.js';
 
 export { DEFAULT_VIEW };
@@ -76,7 +76,8 @@ function savedCamera(value) {
 }
 function savedState(value) {
   shape(value, stateKeys, '모터 실험 상태'); modelVersion(value.modelVersion);
-  shape(value.settings, ['voltageV', 'loadCoefficient'], '모터 설정');
+  // Legacy files use the original motor constants when these fields are absent.
+  shape(value.settings, ['voltageV', 'loadCoefficient'], '모터 설정', ['resistanceOhm', 'inertiaKgM2']);
   shape(value.energyJ, ['supply', 'copper', 'friction', 'load'], '누적 에너지');
   try { assertValidState(value); }
   catch (error) {
@@ -93,11 +94,13 @@ export function snapshotTrace(state) {
 }
 function savedTrace(value, state) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_TRACE_SAMPLES) fail('그래프 기록은 현재 표본을 포함해 1~1000개여야 합니다.', 'INVALID_TRACE');
+  // Resistance and inertia stay fixed for the entire trace.
+  const limits = stateMotionLimits(state.settings);
   let previousTime = 0;
   for (const sample of value) {
     shape(sample, sampleKeys, '그래프 표본');
     numeric(sample.timeS, '표본 시간', previousTime, state.timeS); previousTime = sample.timeS;
-    for (const key of ['currentA', 'omegaRadS']) numeric(sample[key], key, STATE_LIMITS_SI[key].min, STATE_LIMITS_SI[key].max);
+    for (const key of ['currentA', 'omegaRadS']) numeric(sample[key], key, limits[key].min, limits[key].max);
     for (const key of ['voltageV', 'loadCoefficient']) numeric(sample[key], key, SETTINGS_LIMITS_SI[key].min, SETTINGS_LIMITS_SI[key].max);
     const expectedEmf = MOTOR_CONSTANTS_SI.backEmfConstantVsPerRad * sample.omegaRadS;
     if (!finite(sample.backEmfV) || Object.is(sample.backEmfV, -0)
@@ -105,7 +108,7 @@ function savedTrace(value, state) {
     // Samples contain no energy ledger: only complete saved states go through
     // the model's energy validator. Do not invent a historical ledger here.
     if (sample.timeS === 0 && (sample.currentA !== 0 || sample.omegaRadS !== 0)) fail('새 실험의 첫 표본은 정지 상태여야 합니다.', 'INVALID_TRACE');
-    if (state.locked && (sample.omegaRadS !== 0 || !validLockedCurrent(sample.currentA))) fail('고정축 그래프의 운동 또는 전류가 일치하지 않습니다.', 'INVALID_TRACE');
+    if (state.locked && (sample.omegaRadS !== 0 || !validLockedCurrent(sample.currentA, state.settings.resistanceOhm))) fail('고정축 그래프의 운동 또는 전류가 일치하지 않습니다.', 'INVALID_TRACE');
   }
   const current = snapshotTrace(state), last = value.at(-1);
   if (sampleKeys.some(key => last[key] !== current[key])) fail('그래프의 마지막 표본이 현재 실험 상태와 다릅니다.', 'INVALID_TRACE');

@@ -13,34 +13,61 @@ const { resistanceOhm: R, inductanceH: L, inertiaKgM2: J, frictionCoefficient: B
 const TAU = 2 * Math.PI;
 export const MAX_STEP_SECONDS = 3600;
 export const MAX_SIMULATION_TIME_S = 1e6;
-// Conservative energy bound from E' <= 36 - 0.1 E, not a motor rating.
+// Conservative default energy bound from E' <= 36 - 0.1 E.
 export const MAX_STORED_ENERGY_J = 360;
 export const DEFAULT_SETTINGS = Object.freeze({ voltageV: 6, loadCoefficient: 0 });
 export const SETTINGS_LIMITS_SI = Object.freeze({
   voltageV: Object.freeze({ min: 0, max: 12 }),
   loadCoefficient: Object.freeze({ min: 0, max: 0.001 }),
+  resistanceOhm: Object.freeze({ min: 1, max: 8 }),
+  inertiaKgM2: Object.freeze({ min: 0.0001, max: 0.002 }),
 });
-export const STATE_LIMITS_SI = Object.freeze({
-  currentA: Object.freeze({ min: -Math.sqrt(2 * MAX_STORED_ENERGY_J / L), max: Math.sqrt(2 * MAX_STORED_ENERGY_J / L) }),
-  omegaRadS: Object.freeze({ min: -Math.sqrt(2 * MAX_STORED_ENERGY_J / J), max: Math.sqrt(2 * MAX_STORED_ENERGY_J / J) }),
-  angleRad: Object.freeze({ min: 0, max: TAU }), // max excluded
-});
-const SETTINGS_KEYS = ['voltageV', 'loadCoefficient'];
+const LIVE_SETTINGS_KEYS = ['voltageV', 'loadCoefficient'];
+// Fixed for a run and optional in files saved with the nominal motor.
+const MOTOR_SETTINGS_KEYS = ['resistanceOhm', 'inertiaKgM2'];
 const ENERGY_KEYS = ['supply', 'copper', 'friction', 'load'];
 const STATE_KEYS = ['modelVersion', 'settings', 'locked', 'timeS', 'currentA', 'omegaRadS', 'angleRad', 'energyJ'];
 const zero = value => Object.is(value, -0) ? 0 : value;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const energyTolerance = scale => 1e-8 + 5e-11 * Math.max(1, scale);
+const noOptionalKeys = [];
+
+function motionLimits(energyLimitJ, inertiaKgM2) {
+  const current = Math.sqrt(2 * energyLimitJ / L);
+  const speed = Math.sqrt(2 * energyLimitJ / inertiaKgM2);
+  return {
+    currentA: Object.freeze({ min: -current, max: current }),
+    omegaRadS: Object.freeze({ min: -speed, max: speed }),
+  };
+}
+
+const DEFAULT_MOTION_LIMITS = Object.freeze(motionLimits(MAX_STORED_ENERGY_J, J));
+export const STATE_LIMITS_SI = Object.freeze({
+  ...DEFAULT_MOTION_LIMITS,
+  angleRad: Object.freeze({ min: 0, max: TAU }), // max excluded
+});
+
+// E' <= Vmax²/(2R) - (R/L)E_magnetic - (2B/J)E_kinetic.
+// R/L exceeds 2B/J throughout the supported range, including zero load.
+function energyLimit(resistance, inertia) {
+  return MAX_STORED_ENERGY_J * (R / resistance) * (inertia / J);
+}
+
+export function stateMotionLimits(settings) {
+  const { resistanceOhm = R, inertiaKgM2 = J } = settings;
+  if (resistanceOhm === R && inertiaKgM2 === J) return DEFAULT_MOTION_LIMITS;
+  return motionLimits(energyLimit(resistanceOhm, inertiaKgM2), inertiaKgM2);
+}
 
 function record(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError(`${label}: an object is required`);
 }
 
-function exactKeys(value, expected, label) {
+function exactKeys(value, expected, label, optional = noOptionalKeys) {
   record(value, label);
   const keys = Object.keys(value);
-  if (keys.length !== expected.length || keys.some(key => !expected.includes(key))) throw new TypeError(`${label}: missing or unknown field`);
+  if (expected.some(key => !keys.includes(key)) || keys.some(key => !expected.includes(key) && !optional.includes(key))) throw new TypeError(`${label}: missing or unknown field`);
 }
 
 function numberIn(value, min, max, label, exclusiveMax = false) {
@@ -50,12 +77,12 @@ function numberIn(value, min, max, label, exclusiveMax = false) {
 
 // A fixed shaft has no back EMF: from rest, every permitted voltage keeps
 // RL current between zero and Vmax/R. Allow numerical integration roundoff.
-export const validLockedCurrent = current => finite(current) && current >= 0
-  && current <= SETTINGS_LIMITS_SI.voltageV.max / R + 5e-10;
+export const validLockedCurrent = (current, resistanceOhm = R) => finite(current) && current >= 0
+  && current <= SETTINGS_LIMITS_SI.voltageV.max / resistanceOhm + 5e-10;
 
 function validSettings(value) {
-  exactKeys(value, SETTINGS_KEYS, 'settings');
-  for (const key of SETTINGS_KEYS) numberIn(value[key], SETTINGS_LIMITS_SI[key].min, SETTINGS_LIMITS_SI[key].max, `settings.${key}`);
+  exactKeys(value, LIVE_SETTINGS_KEYS, 'settings', MOTOR_SETTINGS_KEYS);
+  for (const key of Object.keys(value)) numberIn(value[key], SETTINGS_LIMITS_SI[key].min, SETTINGS_LIMITS_SI[key].max, `settings.${key}`);
 }
 
 function wrapPhase(value) {
@@ -70,16 +97,17 @@ function cloneState(state) {
 
 function storedEnergy(state) {
   const magnetic = 0.5 * L * state.currentA ** 2;
-  const kinetic = 0.5 * J * state.omegaRadS ** 2;
+  const kinetic = 0.5 * (state.settings.inertiaKgM2 ?? J) * state.omegaRadS ** 2;
   return { magnetic, kinetic, total: magnetic + kinetic };
 }
 
 /** Normalization is only for creating live experiments, never for saved input. */
 export function normalizeSettings(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  return Object.fromEntries(SETTINGS_KEYS.map(key => {
+  const keys = [...LIVE_SETTINGS_KEYS, ...MOTOR_SETTINGS_KEYS.filter(key => Object.hasOwn(input, key))];
+  return Object.fromEntries(keys.map(key => {
     const { min, max } = SETTINGS_LIMITS_SI[key];
-    return [key, zero(finite(input[key]) ? Math.min(max, Math.max(min, input[key])) : DEFAULT_SETTINGS[key])];
+    return [key, zero(finite(input[key]) ? Math.min(max, Math.max(min, input[key])) : DEFAULT_SETTINGS[key] ?? MOTOR_CONSTANTS_SI[key])];
   }));
 }
 
@@ -107,7 +135,9 @@ export function assertValidState(state) {
   validSettings(state.settings);
   if (typeof state.locked !== 'boolean') throw new TypeError('state.locked: a boolean is required');
   numberIn(state.timeS, 0, MAX_SIMULATION_TIME_S, 'state.timeS');
-  for (const key of ['currentA', 'omegaRadS']) numberIn(state[key], STATE_LIMITS_SI[key].min, STATE_LIMITS_SI[key].max, `state.${key}`);
+  const { resistanceOhm = R, inertiaKgM2 = J } = state.settings;
+  const limits = stateMotionLimits(state.settings);
+  for (const key of ['currentA', 'omegaRadS']) numberIn(state[key], limits[key].min, limits[key].max, `state.${key}`);
   numberIn(state.angleRad, 0, TAU, 'state.angleRad', true);
   exactKeys(state.energyJ, ENERGY_KEYS, 'state.energyJ');
   for (const key of ENERGY_KEYS) {
@@ -116,14 +146,15 @@ export function assertValidState(state) {
   }
   const stored = storedEnergy(state).total;
   const losses = state.energyJ.copper + state.energyJ.friction + state.energyJ.load;
-  const inputBound = SETTINGS_LIMITS_SI.voltageV.max * STATE_LIMITS_SI.currentA.max * state.timeS;
+  const storedBound = energyLimit(resistanceOhm, inertiaKgM2);
+  const inputBound = SETTINGS_LIMITS_SI.voltageV.max * limits.currentA.max * state.timeS;
   const scale = Math.max(Math.abs(state.energyJ.supply), losses, stored);
   const tolerance = energyTolerance(scale);
-  if (!Number.isFinite(losses) || stored > MAX_STORED_ENERGY_J + energyTolerance(MAX_STORED_ENERGY_J)) throw new RangeError('state: stored energy exceeds supported bound');
+  if (!Number.isFinite(losses) || stored > storedBound + energyTolerance(storedBound)) throw new RangeError('state: stored energy exceeds supported bound');
   if (Math.abs(state.energyJ.supply) > inputBound + tolerance || losses > inputBound + tolerance) throw new RangeError('state: accumulated energy exceeds time/input bound');
   if (Math.abs(state.energyJ.supply - losses - stored) > tolerance) throw new RangeError('state: cumulative energy does not balance stored energy and losses');
   if (state.timeS === 0 && (state.currentA !== 0 || state.omegaRadS !== 0 || ENERGY_KEYS.some(key => state.energyJ[key] !== 0))) throw new RangeError('state: an experiment starts from rest with zero energy');
-  if (state.locked && (state.omegaRadS !== 0 || !validLockedCurrent(state.currentA) || state.energyJ.friction !== 0 || state.energyJ.load !== 0)) throw new RangeError('state: inconsistent locked shaft');
+  if (state.locked && (state.omegaRadS !== 0 || !validLockedCurrent(state.currentA, resistanceOhm) || state.energyJ.friction !== 0 || state.energyJ.load !== 0)) throw new RangeError('state: inconsistent locked shaft');
   return state;
 }
 
@@ -131,7 +162,7 @@ export function assertValidState(state) {
 export function reconfigureExperiment(state, patch) {
   assertValidState(state);
   record(patch, 'patch');
-  if (Object.keys(patch).some(key => !SETTINGS_KEYS.includes(key))) throw new TypeError('patch: only voltageV and loadCoefficient may change');
+  if (Object.keys(patch).some(key => !LIVE_SETTINGS_KEYS.includes(key))) throw new TypeError('patch: only voltageV and loadCoefficient may change');
   const settings = { ...state.settings, ...patch };
   validSettings(settings);
   return { ...cloneState(state), settings };
@@ -139,15 +170,18 @@ export function reconfigureExperiment(state, patch) {
 
 export function instantSnapshot(state) {
   assertValidState(state);
-  const { currentA: i, omegaRadS: w, settings: { voltageV: voltage, loadCoefficient: load } } = state;
-  const di = (voltage - R * i - K * w) / L;
-  const dw = state.locked ? 0 : (K * i - (B + load) * w) / J;
+  const { currentA: i, omegaRadS: w, settings } = state;
+  const { voltageV: voltage, loadCoefficient: load, resistanceOhm = R, inertiaKgM2 = J } = settings;
+  const di = (voltage - resistanceOhm * i - K * w) / L;
+  const dw = state.locked ? 0 : (K * i - (B + load) * w) / inertiaKgM2;
   return {
     timeS: state.timeS,
     angleRad: state.angleRad,
     omegaRadS: w,
     currentA: i,
     voltageV: voltage,
+    resistanceOhm,
+    inertiaKgM2,
     backEmfV: zero(K * w),
     torqueNm: zero(K * i),
     loadTorqueNm: zero(load * w),
@@ -157,11 +191,11 @@ export function instantSnapshot(state) {
     constraintTorqueNm: state.locked ? zero(-K * i) : 0,
     powerW: {
       supply: zero(voltage * i),
-      copper: R * i * i,
+      copper: resistanceOhm * i * i,
       friction: B * w * w,
       load: load * w * w,
       electromagnetic: zero(K * i * w),
-      storageRate: zero(L * i * di + J * w * dw),
+      storageRate: zero(L * i * di + inertiaKgM2 * w * dw),
     },
     storedEnergyJ: storedEnergy(state),
     energyJ: { ...state.energyJ },
@@ -217,7 +251,8 @@ function synchronizeMoments(matrix) {
 }
 
 function transition(settings, locked, dt) {
-  const key = `${settings.voltageV}|${settings.loadCoefficient}|${locked}|${dt}`;
+  const { resistanceOhm = R, inertiaKgM2 = J } = settings;
+  const key = `${settings.voltageV}|${settings.loadCoefficient}|${resistanceOhm}|${inertiaKgM2}|${locked}|${dt}`;
   if (transitionCache.has(key)) {
     const hit = transitionCache.get(key);
     transitionCache.delete(key);
@@ -225,10 +260,10 @@ function transition(settings, locked, dt) {
     return hit;
   }
   const u = settings.voltageV / (L * CURRENT_SCALE);
-  const a = R / L;
+  const a = resistanceOhm / L;
   const c = K * SPEED_SCALE / (L * CURRENT_SCALE);
-  const d = locked ? 0 : K * CURRENT_SCALE / (J * SPEED_SCALE);
-  const e = locked ? 0 : (B + settings.loadCoefficient) / J;
+  const d = locked ? 0 : K * CURRENT_SCALE / (inertiaKgM2 * SPEED_SCALE);
+  const e = locked ? 0 : (B + settings.loadCoefficient) / inertiaKgM2;
   const m = new Float64Array(N * N);
   const set = (row, col, value) => { m[row * N + col] = value * dt; };
   set(1, 0, u); set(1, 1, -a); set(1, 2, -c);
@@ -283,7 +318,7 @@ export function step(state, dt) {
   }
   const deltaEnergyJ = {
     supply: zero(state.settings.voltageV * CURRENT_SCALE * final[6]),
-    copper: zero(R * CURRENT_SCALE ** 2 * final[8]),
+    copper: zero((state.settings.resistanceOhm ?? R) * CURRENT_SCALE ** 2 * final[8]),
     friction: zero(B * SPEED_SCALE ** 2 * final[9]),
     load: zero(state.settings.loadCoefficient * SPEED_SCALE ** 2 * final[9]),
   };

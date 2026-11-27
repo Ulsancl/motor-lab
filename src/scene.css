@@ -8,7 +8,20 @@
 .motor-part-label { position:absolute; pointer-events:auto; min-height:30px; padding:6px 8px; border:1px solid #78939f70; border-radius:5px; background:#14232bea; color:#e1eaed; font:500 11px/1.35 system-ui,sans-serif; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 8px #0003; cursor:pointer; }
 .motor-part-label:hover,.motor-part-label:focus-visible { color:#fff; border-color:#7be1d3; background:#21434a; }
 .motor-part-label.is-selected { border-color:#79d4cc; background:#1a4850ef; color:#eafffc; }
-.motor-part-label[hidden],.motor-scene-note[hidden],.motor-contact-readout[hidden] { display:none; }
-.motor-contact-readout { position:absolute; right:12px; bottom:13px; max-width:calc(100% - 24px); color:#c8ddd7; background:#142731ed; border:1px solid #4f716c; padding:7px 10px; border-radius:5px; font:500 11px/1.4 system-ui,sans-serif; text-align:right; }
-.motor-scene-note { position:absolute; bottom:49px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100% - 28px); border:1px solid #c9ad6859; border-radius:5px; padding:7px 10px; color:#ecd4a5; background:#263535ed; font:11px/1.4 system-ui,sans-serif; text-align:center; }
-@media(max-width:600px) { .motor-part-label { font-size:10px; padding:6px; } .motor-contact-readout { font-size:10px; left:10px; right:10px; text-align:center; padding:6px; } .motor-scene-note { font-size:10px; bottom:46px; } }
+.motor-part-label[hidden],.motor-scene-status [hidden] { display:none; }
+.motor-scene-status { position:absolute; right:12px; bottom:12px; left:12px; display:grid; justify-items:end; gap:5px; color:#dbe9e7; font:500 11px/1.45 system-ui,sans-serif; }
+.motor-scene-observation { max-width:100%; padding:7px 10px; border:1px solid #5a777b; border-radius:5px; background:#142731f5; font-variant-numeric:tabular-nums; }
+.motor-operating-readout,.motor-contact-readout { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 12px; }
+.motor-operating-readout > span,.motor-contact-readout > span { white-space:nowrap; }
+.motor-speed-readout { color:#b5dfed; }
+.motor-contact-readout { margin-top:4px; padding-top:4px; border-top:1px solid #52717685; color:#b5c9cc; }
+.motor-contact-positive { color:#ffc18b; }
+.motor-contact-negative { color:#9ce6f4; }
+.motor-contact-overlap { color:#e8ddbd; }
+.motor-scene-note { justify-self:center; max-width:100%; border:1px solid #c9ad6859; border-radius:5px; padding:5px 9px; color:#ecd4a5; background:#263535f5; text-align:center; overflow-wrap:anywhere; }
+@media(max-width:600px) {
+  .motor-part-label { font-size:10px; padding:6px; }
+  .motor-scene-status { bottom:9px; left:9px; right:9px; justify-items:center; font-size:10px; }
+  .motor-scene-observation { padding:6px 8px; }
+  .motor-operating-readout,.motor-contact-readout { justify-content:center; }
+}
