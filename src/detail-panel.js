@@ -1,4 +1,5 @@
 import { describeMotorDetail } from './detail-readouts.js';
+import { renderConditionPower } from './condition-power.js';
 
 const $ = selector => document.querySelector(selector);
 const format = (value, digits = 2) => (Math.abs(value) < .5 * 10 ** -digits ? 0 : value).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -28,7 +29,8 @@ function signedBars(prefix, values, unit, digits) {
   $(`#${prefix}-scale`).textContent = `막대 중심은 0 · 양끝 ±${format(scale, digits)} ${unit}`;
 }
 export function renderMotorDetails(state, snapshot, view, detail) {
-  const selected = describeMotorDetail(view.selectedPart, state, snapshot);
+  renderConditionPower(state, snapshot, detail);
+  const selected = describeMotorDetail(view.selectedPart, state, snapshot, detail);
   facts('#part-detail-facts', selected.facts); facts('#focus-detail-facts', selected.facts);
   $('#part-detail-note').textContent = selected.note; $('#focus-detail-note').textContent = selected.note;
   $('#focus-part-select').value = view.selectedPart;

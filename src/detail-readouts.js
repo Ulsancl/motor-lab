@@ -1,6 +1,6 @@
 import { motorDetail } from './detail-model.js';
 import { GEOMETRY_SI as G } from './geometry.js';
-import { MOTOR_CONSTANTS_SI as M } from './model.js';
+import { instantSnapshot, MOTOR_CONSTANTS_SI as M } from './model.js';
 import { BEARING_DETAIL } from './mechanical-geometry.js';
 
 const degrees = radians => radians * 180 / Math.PI;
@@ -13,8 +13,8 @@ const torqueNote = '전자기·마찰·부하 토크의 부호는 +X 회전을 �
 const steadyNote = '평형 참조는 현재 전압·부하를 계속 유지할 때의 최종값입니다. 현재 전류·속도·저장 에너지를 초기화하거나 도달 시간을 예측하지 않습니다.';
 
 /** Component observations derived without changing simulation or project data. */
-export function describeMotorDetail(partId, state, snapshot) {
-  const d = motorDetail(state, snapshot), e = d.electrical, m = d.mechanical, p = d.power, c = d.contact;
+export function describeMotorDetail(partId, state, snapshot = instantSnapshot(state), d = motorDetail(state, snapshot)) {
+  const { electrical: e, mechanical: m, power: p, contact: c } = d;
   const current = () => fact('평균 단자 전류 · +단자 유입 +', d.currentA, 'A', 3);
   const rpm = () => fact('현재 회전수', d.rpm, 'rpm', 1);
   const surface = () => fact('정류자 표면 속도 · +X 회전 +', c.surfaceVelocityMps, 'm/s', 3);
@@ -50,7 +50,7 @@ export function describeMotorDetail(partId, state, snapshot) {
   if (partId.startsWith('coil-')) {
     const coil = G.coils.find(coil => coil.id === partId);
     if (coil) return { facts: [fact('권선의 연결 편', `${segmentName(coil.from)} → ${segmentName(coil.to)}`), current(),
-      fact('전체 전기자 저항', M.resistanceOhm, 'Ω', 2), fact('전체 전기자 인덕턴스', M.inductanceH * 1000, 'mH', 2),
+      fact('전체 전기자 저항', snapshot.resistanceOhm, 'Ω', 2), fact('전체 전기자 인덕턴스', M.inductanceH * 1000, 'mH', 2),
       fact('전체 전기자 구리 손실', p.copperW, 'W', 3), fact('전체 자기 저장 에너지', d.storedEnergyJ.magnetic * 1000, 'mJ', 3)], note: averageNote };
   }
   if (partId === 'slot-insulation') return {

@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GEOMETRY_SI as G, COMPONENTS, DEFAULT_VIEW, sampleCommutation, COIL_LEAD_ROUTES, coilWindingPoints, EXTERNAL_LEADS, radialPoint, TAU } from './geometry.js';
 import { BEARING_DETAIL as B, motorBearingKinematics, bearingRaceGeometry, revolvedProfileGeometry, brushGuideGeometry } from './mechanical-geometry.js';
+import { sleeveGeometry, windingTube } from './scene-geometry.js';
 import './scene.css';
 
 const V = a => new THREE.Vector3(...a);
@@ -10,34 +12,8 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const ordinary = x => Object.is(x, -0) ? 0 : x;
 const center = range => (range[0] + range[1]) / 2;
 const length = range => range[1] - range[0];
-
-// Closed hollow X-axis sectors have actual inner walls, end faces and cut faces.
-function sleeveGeometry(inner, outer, size, start = 0, sweep = TAU) {
-  const positions = [], normals = [], count = Math.max(12, Math.ceil(sweep / TAU * 96));
-  const p = (x, r, a) => [x, r * Math.cos(a), r * Math.sin(a)];
-  const quad = (a, b, c, d, reverse = false, radialSign = 0) => {
-    const order = reverse ? [a, c, b, a, d, c] : [a, b, c, a, c, d];
-    let n = V(order[1]).sub(V(order[0])).cross(V(order[2]).sub(V(order[0])));
-    if (n.lengthSq() < 1e-26) n = V(order[4]).sub(V(order[3])).cross(V(order[5]).sub(V(order[3])));
-    n.normalize();
-    for (const value of order) {
-      positions.push(...value);
-      // Smooth only the cylindrical walls; the end and section faces stay flat.
-      if (radialSign) { const r = Math.hypot(value[1], value[2]); normals.push(0, radialSign * value[1] / r, radialSign * value[2] / r); }
-      else normals.push(...n.toArray());
-    }
-  };
-  for (let i = 0; i < count; i++) {
-    const a = start + sweep * i / count, b = start + sweep * (i + 1) / count;
-    quad(p(-size / 2, outer, a), p(-size / 2, outer, b), p(size / 2, outer, b), p(size / 2, outer, a), false, 1);
-    if (inner > 0) quad(p(-size / 2, inner, a), p(size / 2, inner, a), p(size / 2, inner, b), p(-size / 2, inner, b), false, -1);
-    for (const side of [-1, 1]) quad(p(side * size / 2, inner, a), p(side * size / 2, inner, b), p(side * size / 2, outer, b), p(side * size / 2, outer, a), side < 0);
-  }
-  if (sweep < TAU - 1e-10) for (const [a, reverse] of [[start, true], [start + sweep, false]]) quad(p(-size / 2, inner, a), p(-size / 2, outer, a), p(size / 2, outer, a), p(size / 2, inner, a), reverse);
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3)); return geometry;
-}
+const shaftRpm = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 });
+const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 function polyline(points) {
   const path = new THREE.CurvePath();
   for (let i = 1; i < points.length; i++) if (V(points[i]).distanceToSquared(V(points[i - 1])) > 1e-24) path.add(new THREE.LineCurve3(V(points[i - 1]), V(points[i])));
@@ -96,27 +72,45 @@ export class MotorScene {
     this.applyView(); this.resize(); this.resetCamera();
   }
   material(values) { const m = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, ...values }); this.materials.add(m); return m; }
+  finishTexture(size, sample) {
+    const pixels = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      pixels.fill(sample(x, y), i, i + 3); pixels[i + 3] = 255;
+    }
+    const texture = new THREE.DataTexture(pixels, size, size);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.magFilter = THREE.LinearFilter; texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.generateMipmaps = true; texture.needsUpdate = true; this.textures.add(texture);
+    return texture;
+  }
   createMaterials() {
+    // Circumferential tool marks. Mipmaps keep the details stable in wide views.
+    const turned = this.finishTexture(256, (x, y) => Math.round(150 + 18 * Math.sin(TAU * 42 * y / 256) + 3 * Math.sin(TAU * (7 * x + 11 * y) / 256)));
+    const grain = this.finishTexture(128, (x, y) => {
+      const seed = Math.imul(x + 1, 374761393) + Math.imul(y + 1, 668265263);
+      return 166 + (Math.imul(seed ^ seed >>> 13, 1274126177) >>> 26);
+    });
+    const machined = { roughnessMap: turned, bumpMap: turned };
     this.mat = {
       steel: this.material({ color: '#aebac1', metalness: .92, roughness: .25 }), chrome: this.material({ color: '#d0dce3', metalness: .98, roughness: .16 }),
       iron: this.material({ color: '#657784', metalness: .9, roughness: .36 }), dark: this.material({ color: '#263d49', metalness: .67, roughness: .4 }),
       case: this.material({ color: '#7c9aa8', metalness: .85, roughness: .31 }), painted: this.material({ color: '#286379', metalness: .55, roughness: .4 }),
-      copper: this.material({ color: '#c68246', metalness: .9, roughness: .24 }), brass: this.material({ color: '#d0ab62', metalness: .85, roughness: .3 }),
-      insulation: this.material({ color: '#d5c4a1', metalness: .01, roughness: .7 }), resin: this.material({ color: '#30363c', metalness: .02, roughness: .65 }),
-      graphite: this.material({ color: '#444a4d', metalness: .2, roughness: .78 }), rubber: this.material({ color: '#182027', metalness: .05, roughness: .8 }),
+      housing: this.material({ color: '#647f88', metalness: .72, roughness: .56, roughnessMap: grain, bumpMap: grain, bumpScale: .00007 }),
+      copper: this.material({ color: '#b87343', metalness: .88, roughness: .38, ...machined, bumpScale: .000009 }),
+      shaft: this.material({ color: '#b2bec7', metalness: .96, roughness: .33, ...machined, bumpScale: .0000045 }),
+      brass: this.material({ color: '#d0ab62', metalness: .85, roughness: .3 }),
+      insulation: this.material({ color: '#cfb99a', metalness: .02, roughness: .76 }), resin: this.material({ color: '#323434', metalness: .02, roughness: .66 }),
+      graphite: this.material({ color: '#3b3e41', metalness: .16, roughness: .93, roughnessMap: grain, bumpMap: grain, bumpScale: .000025 }),
+      rubber: this.material({ color: '#182027', metalness: .05, roughness: .8 }),
       magnetN: this.material({ color: '#945f58', metalness: .36, roughness: .56 }), magnetS: this.material({ color: '#4b788b', metalness: .36, roughness: .56 }),
       positive: this.material({ color: '#c66c59', metalness: .2, roughness: .53 }), negative: this.material({ color: '#497d9d', metalness: .2, roughness: .5 }),
-      arrow: this.material({ color: '#e8f6cc', emissive: '#b6d58c', emissiveIntensity: .3, roughness: .5 }),
+      arrow: new THREE.MeshBasicMaterial({ color: '#f6f5d3', toneMapped: false }),
+      markPositive: new THREE.MeshBasicMaterial({ color: '#ffb16a', side: THREE.DoubleSide, toneMapped: false }),
+      markNegative: new THREE.MeshBasicMaterial({ color: '#7bdef2', side: THREE.DoubleSide, toneMapped: false }),
     };
-    const size = 256, pixels = new Uint8Array(size * size * 4);
-    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-      // 42 grooves over 256 samples: smooth, periodic and below Nyquist.
-      const value = Math.round(150 + 18 * Math.sin(TAU * 42 * y / size) + 3 * Math.sin(TAU * (7 * x + 11 * y) / size));
-      const i = (y * size + x) * 4; pixels[i] = pixels[i + 1] = pixels[i + 2] = value; pixels[i + 3] = 255;
-    }
-    const turned = new THREE.DataTexture(pixels, size, size); turned.wrapS = turned.wrapT = THREE.RepeatWrapping;
-    turned.magFilter = THREE.LinearFilter; turned.minFilter = THREE.LinearMipmapLinearFilter; turned.generateMipmaps = true; turned.needsUpdate = true; this.textures.add(turned);
-    this.mat.race = this.material({ color: '#aab7bf', metalness: .94, roughness: .29, roughnessMap: turned, bumpMap: turned, bumpScale: .0000018 });
+    for (const material of [this.mat.arrow, this.mat.markPositive, this.mat.markNegative]) this.materials.add(material);
+    this.mat.race = this.material({ color: '#aab7bf', metalness: .94, roughness: .29, ...machined, bumpScale: .0000018 });
     this.mat.cage = this.material({ color: '#ad8245', metalness: .8, roughness: .38 });
   }
   mesh(geometry, material, parent, position) {
@@ -152,10 +146,12 @@ export class MotorScene {
     const axisDelta = axis === 'x' ? [.0008, 0, 0] : axis === 'y' ? [0, .0008, 0] : [0, 0, .0008];
     this.cylinder(.0007 * scale, .00018, this.mat.dark, parent, position.map((p, i) => p + axisDelta[i] * scale), axis, 6);
   }
-  splitSleeve(id, inner, outer, range, mat, displacement, parent = this.root) {
+  splitSleeve(id, inner, outer, range, mat, displacement, parent = this.root, ventBanks = []) {
     const node = this.part(id, [center(range), G.axisY + outer * .8, -outer * .55], parent), back = new THREE.Group(), front = new THREE.Group(); node.add(back, front);
-    this.sleeve(inner, outer, length(range), mat, back, [center(range), G.axisY, 0], Math.PI, Math.PI);
-    this.sleeve(inner, outer, length(range), mat, front, [center(range), G.axisY, 0], 0, Math.PI);
+    const vents = ventBanks.map(bank => bank.map(x => x - center(range)));
+    for (const [half, start] of [[back, Math.PI], [front, 0]]) {
+      this.mesh(sleeveGeometry(inner, outer, length(range), start, Math.PI, vents), mat, half, [center(range), G.axisY, 0]);
+    }
     this.covers.push({ front, displacement, layer: 'housing' }); return node;
   }
   plateText(text, width, height, parent, position, rotation = [0, 0, 0], colors = {}) {
@@ -168,7 +164,8 @@ export class MotorScene {
   }
   buildStator() {
     const m = this.mat;
-    this.housing = this.splitSleeve('housing', G.housingInnerRadius, G.housingOuterRadius, G.housingX, m.case, [0, .010, .115]);
+    // The two vent banks clear the cradle bands and the centre nameplate.
+    this.housing = this.splitSleeve('housing', G.housingInnerRadius, G.housingOuterRadius, G.housingX, m.housing, [0, .010, .115], this.root, [[-.039, -.026], [.008, .018]]);
     for (const x of [-.051, .032]) this.sleeve(.030, .0312, .003, m.chrome, this.housing, [x, G.axisY, 0], Math.PI, Math.PI);
     this.plateText('MOTOR LAB  /  PM DC', .064, .011, this.housing, [-.008, .082, -.0294], [0, Math.PI, 0]);
     for (const [id, range, delta] of [['endbell-rear', G.rearEndbellX, -.05], ['endbell-front', G.frontEndbellX, .045]]) {
@@ -254,14 +251,27 @@ export class MotorScene {
   buildRotor() {
     const m = this.mat;
     const shaft = this.part('shaft', [.024, .003, .002], this.rotor);
-    this.cylinder(G.shaftRadius, length(G.shaftX), m.chrome, shaft, [center(G.shaftX), 0, 0]);
+    const [left, right] = G.shaftX, radius = G.shaftRadius, chamfer = .00018;
+    const shaftProfile = [[left, 0], [left, radius - chamfer], [left + chamfer, radius],
+      [right - chamfer, radius], [right, radius - chamfer], [right, 0]].map(([x, r]) => ({ x, r }));
+    this.mesh(revolvedProfileGeometry(shaftProfile, { segments: 48 }), m.shaft, shaft);
     for (const x of [-.052, .031]) this.sleeve(.003, .0048, .0012, m.brass, shaft, [x, 0, 0]);
     const core = this.part('armature-core', [0, .014, .010], this.rotor), insulation = this.part('slot-insulation', [.021, .012, .010], this.rotor);
     this.sleeve(G.shaftRadius, G.coreHubRadius, length(G.coreX), m.iron, core, [0, 0, 0]);
+    const laminations = [[], []];
+    for (let i = 0; i < 27; i++) {
+      laminations[i % 3 === 0 ? 0 : 1].push(sleeveGeometry(.018, .021, .00138, -Math.PI / 6, Math.PI / 3).translate(-.0193 + i * .001485, 0, 0));
+    }
+    const stacks = laminations.map(sheets => {
+      const stack = mergeGeometries(sheets);
+      for (const sheet of sheets) sheet.dispose();
+      return stack;
+    });
     for (const coil of G.coils) {
       const tooth = new THREE.Group(); tooth.rotation.x = coil.axisRad; core.add(tooth);
       this.box([.040, .012, .006], m.iron, tooth, [0, .0125, 0]);
-      for (let i = 0; i < 27; i++) this.sleeve(.018, .021, .00138, i % 3 === 0 ? m.steel : m.iron, tooth, [-.0193 + i * .001485, 0, 0], -Math.PI / 6, Math.PI / 3);
+      this.mesh(stacks[0], m.steel, tooth);
+      this.mesh(stacks[1], m.iron, tooth);
       const liner = new THREE.Group(); liner.rotation.x = coil.axisRad; insulation.add(liner);
       for (const side of [-1, 1]) {
         this.box([.042, .0115, .0005], m.insulation, liner, [0, .0125, side * .00345]);
@@ -269,8 +279,10 @@ export class MotorScene {
       }
     }
     G.coils.forEach((coil, index) => {
-      const node = this.part(coil.id, radialPoint(0, .016, coil.axisRad), this.rotor), material = this.material({ color: coil.color, metalness: .83, roughness: .3 });
-      this.tube(coilWindingPoints(index), .00028, material, node);
+      const node = this.part(coil.id, radialPoint(0, .016, coil.axisRad), this.rotor);
+      const material = new THREE.MeshPhysicalMaterial({ color: coil.color, metalness: .58, roughness: .32, clearcoat: .72, clearcoatRoughness: .16 });
+      this.materials.add(material);
+      this.mesh(windingTube(rounded(coilWindingPoints(index), .00085), .00028), material, node);
       for (const route of COIL_LEAD_ROUTES.filter(route => route.coilId === coil.id)) {
         // Exact polyline: CPU clearance tests apply to the same centre line.
         const { mesh } = this.tube(route.points, route.radiusM, material, node); mesh.userData.route = route; this.leadMeshes.push(mesh);
@@ -282,7 +294,6 @@ export class MotorScene {
       const node = this.part(`segment-${i}`, radialPoint(-.041, .010, G.segmentCentersRad[i]), this.rotor);
       const mesh = this.sleeve(G.commutatorHubRadius, G.commutatorRadius, length(G.commutatorX), m.copper, node, [center(G.commutatorX), 0, 0], G.segmentCentersRad[i] - G.segmentArcRad / 2, G.segmentArcRad);
       for (const side of [-1, 1]) {
-        const p = radialPoint(-.0338, .0094, G.segmentCentersRad[i] + side * Math.PI / 9);
         this.sleeve(.0088, .01035, .0011, m.copper, node, [-.0338, 0, 0], G.segmentCentersRad[i] + side * Math.PI / 9 - .035, .07);
       }
       this.segments.push({ id: `segment-${i}`, node, mesh });
@@ -292,7 +303,7 @@ export class MotorScene {
     this.sleeve(.0032, .0075, .004, m.rubber, coupling, [.057, 0, 0]);
     for (const x of [.052, .062]) this.bolt(coupling, [x, .008, 0], 'y', .75);
     const load = this.part('load-rotor', [.085, .019, .006], this.rotor);
-    this.cylinder(.003, length(G.loadShaftX), m.chrome, load, [center(G.loadShaftX), 0, 0]);
+    this.cylinder(.003, length(G.loadShaftX), m.shaft, load, [center(G.loadShaftX), 0, 0]);
     this.cylinder(G.loadRotorRadius, length(G.loadRotorX), m.iron, load, [center(G.loadRotorX), 0, 0]);
     for (const x of [.075, .095]) this.sleeve(.012, .0243, .0014, m.steel, load, [x, 0, 0]);
     this.box([.020, .001, .003], m.brass, load, [.085, .0244, 0]);
@@ -300,11 +311,14 @@ export class MotorScene {
   buildContacts() {
     const m = this.mat;
     this.brushes = []; this.brushGuides = [];
+    this.contactMarks = new THREE.Group(); this.root.add(this.contactMarks);
     for (const [name, beta] of Object.entries(G.brushAnglesRad)) {
       const sign = name === 'positive' ? 1 : -1, material = sign > 0 ? m.positive : m.negative;
       const brush = this.part(`brush-${name}`, [G.brushCenterX, G.axisY + .00125, sign * .0115]);
       const mesh = this.sleeve(G.commutatorRadius, G.brushOuterRadius, G.brushWidthX, m.graphite, brush, [G.brushCenterX, G.axisY, 0], beta - G.brushArcRad / 2, G.brushArcRad);
-      this.brushes.push({ id: `brush-${name}`, node: brush, mesh, center: V([G.brushCenterX, G.axisY, sign * .014]) });
+      this.sleeve(.0179, .01835, .0064, m.brass, brush, [G.brushCenterX, G.axisY, 0], beta - G.brushArcRad * .4, G.brushArcRad * .8);
+      const marks = [0, 1].map(() => this.createContactMark(sign > 0 ? m.markPositive : m.markNegative));
+      this.brushes.push({ id: `brush-${name}`, node: brush, mesh, center: V([G.brushCenterX, G.axisY, sign * .014]), name, beta, marks });
       const holder = this.part(`brush-holder-${name}`, [-.041, G.axisY + .004, sign * .020]);
       // Four walls leave a real radial guide channel around the carbon shoe.
       const g = brushGuideGeometry(), walls = [];
@@ -327,11 +341,51 @@ export class MotorScene {
       this.cylinder(.0023, .004, material, terminal, [-.094, G.supplyTopY + .002, sign > 0 ? .040 : .025], 'y');
       this.cylinder(.0009, .0045, m.brass, terminal, [-.094, G.terminalContactY, sign > 0 ? .040 : .025], 'y');
       const lead = this.part(`lead-${name}`, EXTERNAL_LEADS[name][2]), tube = this.tube(EXTERNAL_LEADS[name], .00105, material, lead, true);
-      const arrows = [];
-      for (let i = 0; i < 3; i++) {
-        const arrow = this.mesh(new THREE.ConeGeometry(.0016, .0045, 10), m.arrow, lead); arrow.userData.nonPickable = true; arrows.push(arrow);
+      const cone = new THREE.ConeGeometry(.00145, .0043, 10);
+      const arrows = [.22, .49, .76].map(progress => {
+        const arrow = this.mesh(cone, m.arrow, lead);
+        arrow.position.copy(tube.curve.getPointAt(progress));
+        arrow.position.y += .00235;
+        arrow.userData.forward = tube.curve.getTangentAt(progress);
+        arrow.userData.nonPickable = true; arrow.visible = false;
+        arrow.castShadow = false; arrow.receiveShadow = false;
+        return arrow;
+      });
+      this.arrowSets.push({ id: `lead-${name}`, arrows, sign });
+    }
+  }
+  createContactMark(material) {
+    const geometry = new THREE.BufferGeometry(), steps = 6, indices = [];
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array((steps + 1) * 2 * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    for (let i = 0; i < steps * 2; i += 2) indices.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
+    geometry.setIndex(indices);
+    const mark = this.mesh(geometry, material, this.contactMarks, [0, G.axisY, 0]);
+    mark.userData.nonPickable = true; mark.visible = false; mark.frustumCulled = false;
+    mark.castShadow = false; mark.receiveShadow = false;
+    return mark;
+  }
+  updateContactMarks() {
+    // Draw each actual overlap just beyond the brush's axial edge so the
+    // graphite does not hide it. The tints identify brush terminals.
+    const { angleRad } = this.drawnCommutation;
+    for (const { name, beta, marks } of this.brushes) {
+      for (const [i, mark] of marks.entries()) {
+        const overlap = this.drawnCommutation[name][i];
+        mark.visible = !!overlap;
+        if (!overlap) continue;
+        const segment = G.segmentCentersRad[Number(overlap.segmentId.at(-1))] + angleRad;
+        const delta = Math.atan2(Math.sin(segment - beta), Math.cos(segment - beta));
+        const start = beta + Math.max(-G.brushArcRad / 2, delta - G.segmentArcRad / 2);
+        const vertices = mark.geometry.attributes.position, edge = G.brushCenterX + G.brushWidthX / 2;
+        const steps = vertices.count / 2 - 1;
+        for (let j = 0; j <= steps; j++) {
+          const angle = start + overlap.overlapRad * j / steps;
+          const y = (G.commutatorRadius + .00009) * Math.cos(angle), z = (G.commutatorRadius + .00009) * Math.sin(angle);
+          vertices.setXYZ(2 * j, edge, y, z);
+          vertices.setXYZ(2 * j + 1, edge + .00215, y, z);
+        }
+        vertices.needsUpdate = true;
       }
-      this.arrowSets.push({ id: `lead-${name}`, curve: tube.curve, arrows, sign });
     }
   }
   buildBench() {
@@ -366,11 +420,14 @@ export class MotorScene {
   }
   buildField() {
     this.field = new THREE.Group(); this.root.add(this.field);
-    const material = this.material({ color: '#80c0ba', transparent: true, opacity: .65, metalness: .05, roughness: .5 });
+    const material = new THREE.MeshBasicMaterial({ color: '#8fc9be', transparent: true, opacity: .68, depthWrite: false });
+    this.materials.add(material);
     for (const x of [-.013, 0, .013]) for (const z of [-.008, .008]) {
       const points = [[x, G.axisY + .023, z], [x, G.axisY + .01, z * 1.4], [x, G.axisY - .01, z * 1.4], [x, G.axisY - .023, z]];
-      const result = this.tube(points, .00017, material, this.field, true); result.mesh.userData.nonPickable = true;
-      const arrow = this.mesh(new THREE.ConeGeometry(.0012, .003, 10), material, this.field, [x, G.axisY, z * 1.4]); arrow.rotation.x = Math.PI; arrow.userData.nonPickable = true;
+      const { mesh: line } = this.tube(points, .00017, material, this.field, true);
+      const arrow = this.mesh(new THREE.ConeGeometry(.0012, .003, 10), material, this.field, [x, G.axisY, z * 1.4]);
+      arrow.rotation.x = Math.PI;
+      for (const item of [line, arrow]) { item.userData.nonPickable = true; item.castShadow = false; item.receiveShadow = false; }
     }
   }
   buildOverlay() {
@@ -381,8 +438,20 @@ export class MotorScene {
       button.addEventListener('click', () => this.select(part.id)); this.overlay.append(button);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'path'); line.style.display = 'none'; this.svg.append(line); this.labels.set(part.id, { button, line });
     }
-    this.note = document.createElement('div'); this.note.className = 'motor-scene-note'; this.note.hidden = true; this.overlay.append(this.note);
-    this.contactReadout = document.createElement('div'); this.contactReadout.className = 'motor-contact-readout'; this.overlay.append(this.contactReadout);
+    const status = document.createElement('div'); status.className = 'motor-scene-status'; this.overlay.append(status);
+    this.note = document.createElement('p'); this.note.className = 'motor-scene-note'; this.note.hidden = true; status.append(this.note);
+    this.observation = document.createElement('div'); this.observation.className = 'motor-scene-observation';
+    this.observation.setAttribute('role', 'group'); this.observation.setAttribute('aria-label', '전동기 동작과 정류 접촉'); status.append(this.observation);
+    const operating = document.createElement('p'); operating.className = 'motor-operating-readout'; this.observation.append(operating);
+    this.currentReadout = document.createElement('span'); this.currentReadout.className = 'motor-current-readout';
+    this.speedReadout = document.createElement('span'); this.speedReadout.className = 'motor-speed-readout';
+    operating.append(this.currentReadout, this.speedReadout);
+    this.contactReadout = document.createElement('p'); this.contactReadout.className = 'motor-contact-readout'; this.observation.append(this.contactReadout);
+    const positive = document.createElement('span'); positive.className = 'motor-contact-positive';
+    const negative = document.createElement('span'); negative.className = 'motor-contact-negative';
+    const overlap = document.createElement('span'); overlap.className = 'motor-contact-overlap';
+    this.contactReadout.append('브러시 접촉', positive, negative, overlap);
+    this.contactValues = { positive, negative, overlap };
   }
   applyView() {
     const explode = this.view.mode === 'exploded' ? this.view.explode : 0, cut = this.view.mode !== 'assembled';
@@ -396,11 +465,11 @@ export class MotorScene {
       else if (id.startsWith('brush-') || id.startsWith('segment-') || id.startsWith('terminal-') || id.startsWith('lead-') || id === 'commutator-hub') visible = this.view.layers.contacts;
       item.node.visible = visible;
     }
-    this.field.visible = this.view.layers.field;
+    this.field.visible = this.view.layers.field && !this.inspection;
+    this.contactMarks.visible = this.view.layers.contacts && !this.inspection;
     this.updateBearings(cut);
     if (this.inspection) {
       for (const [id, item] of this.components) item.node.visible = id === this.inspection.id;
-      this.field.visible = false;
       const node = this.components.get(this.inspection.id).node, position = node.position.clone();
       if (this.inspection.position) {
         const delta = position.clone().sub(this.inspection.position);
@@ -409,35 +478,58 @@ export class MotorScene {
       this.inspection.position = position;
     }
     if (this.ground) this.ground.visible = !this.inspection;
-    this.note.hidden = !this.inspection && !explode && !this.view.layers.field;
-    this.note.textContent = this.inspection ? `${cut ? '궤도 반절개 · 볼·케이지 전체 유지 · ' : ''}대표 베어링 · 외륜 고정·접촉각 0° · 줄무늬는 자전 관찰 표시`
-      : explode ? '분해 관찰 · 접촉 계산과 평균 모형은 조립 치수 기준입니다' : '자기력선은 방향을 돕는 도식입니다 · 자기장 해석값이 아닙니다';
+    this.observation.hidden = !this.snapshot || !!this.inspection;
+    this.contactReadout.hidden = !this.view.layers.contacts;
+    const notes = this.inspection ? [`${cut ? '궤도 반절개 · 볼·케이지 전체 유지 · ' : ''}대표 베어링 · 외륜 고정·접촉각 0° · 줄무늬는 자전 관찰 표시`] : [];
+    if (!this.inspection && explode) notes.push('분해 관찰 · 접촉과 회전은 조립 치수 기준');
+    if (this.field.visible) notes.push('자기장 N → S · 방향 도식 (정량 눈금 없음)');
+    this.note.hidden = !notes.length; setText(this.note, notes.join(' / '));
   }
   update(snapshot, view, { elapsedS = 0 } = {}) {
     if (this.disposed) return;
     this.updating = true; this.snapshot = snapshot;
     this.view = { ...DEFAULT_VIEW, ...view, layers: { ...DEFAULT_VIEW.layers, ...view?.layers } };
-    this.rotor.rotation.x = snapshot.angleRad; this.drawnCommutation = sampleCommutation(this.rotor.rotation.x);
-    for (const item of this.segments) {
-      const pos = this.drawnCommutation.positive.some(c => c.segmentId === item.id), neg = this.drawnCommutation.negative.some(c => c.segmentId === item.id);
-      item.node.traverse(mesh => { if (mesh.isMesh) mesh.material.color.set(pos ? '#db9973' : neg ? '#78b5bf' : '#bd7d44'); });
-      item.mesh.userData.contact = pos ? 'positive' : neg ? 'negative' : null;
+    this.rotor.rotation.x = snapshot.angleRad;
+    if (this.contactAngle !== snapshot.angleRad) {
+      this.contactAngle = snapshot.angleRad;
+      this.drawnCommutation = sampleCommutation(snapshot.angleRad);
+      for (const item of this.segments) {
+        const pos = this.drawnCommutation.positive.some(c => c.segmentId === item.id), neg = this.drawnCommutation.negative.some(c => c.segmentId === item.id);
+        item.mesh.userData.contact = pos ? 'positive' : neg ? 'negative' : null;
+      }
+      this.updateContactMarks();
     }
-    const current = snapshot.currentA || 0;
-    for (const set of this.arrowSets) for (let i = 0; i < set.arrows.length; i++) {
-      const arrow = set.arrows[i]; arrow.visible = this.view.currentArrows && Math.abs(current) > 1e-8;
-      if (!arrow.visible) continue;
-      const direction = Math.sign(current) * set.sign;
-      const progress = ((i / set.arrows.length + snapshot.timeS * .4 * direction) % 1 + 1) % 1;
-      const p = clamp(progress, .025, .975); arrow.position.copy(set.curve.getPointAt(p)); arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), set.curve.getTangentAt(p).multiplyScalar(direction));
+    const current = snapshot.currentA, direction = Math.sign(current);
+    const arrowDirection = this.view.currentArrows ? direction : 0;
+    if (arrowDirection !== this.arrowDirection) {
+      const up = new THREE.Vector3(0, 1, 0), tangent = new THREE.Vector3();
+      for (const set of this.arrowSets) for (const arrow of set.arrows) {
+        arrow.visible = arrowDirection !== 0;
+        if (arrow.visible) arrow.quaternion.setFromUnitVectors(up, tangent.copy(arrow.userData.forward).multiplyScalar(arrowDirection * set.sign));
+      }
+      this.arrowDirection = arrowDirection;
     }
     this.applyView(); this.highlight(this.view.selectedPart);
-    const ids = contacts => contacts.map(p => p.segmentId.replace('segment-', 'S')).join(' · ');
-    this.contactReadout.textContent = `접촉  + ${ids(this.drawnCommutation.positive)}  /  − ${ids(this.drawnCommutation.negative)}${this.drawnCommutation.bridgedCoils.length ? '  ·  두 편 동시 접촉' : ''}`;
-    this.contactReadout.hidden = !this.view.layers.contacts || !!this.inspection;
+    this.updateObservation(snapshot, direction);
     this.updating = false; this.render();
   }
+  updateObservation({ currentA, rpm, locked }, direction) {
+    const magnitude = Math.abs(currentA), current = magnitude > 0 && magnitude < .001 ? '<0.001' : magnitude.toFixed(3);
+    const flow = direction > 0 ? '+ → 모터 → −' : '− → 모터 → +';
+    setText(this.currentReadout, `평균 전류 ${direction < 0 && magnitude >= .001 ? '−' : ''}${current} A · ${direction ? flow : '흐름 없음'}`);
+    const speed = Math.abs(rpm), speedText = speed > 0 && speed < 1 ? '<1' : shaftRpm.format(speed);
+    const rotation = locked ? '축 고정' : rpm ? `${rpm > 0 ? '+' : '−'}X축` : '정지';
+    setText(this.speedReadout, `회전 ${speedText} rpm · ${rotation}`);
+    const ids = contacts => contacts.map(p => p.segmentId.replace('segment-', 'S')).join('·');
+    const { positive, negative, bridgedCoils } = this.drawnCommutation;
+    setText(this.contactValues.positive, `+ ${ids(positive)}`);
+    setText(this.contactValues.negative, `− ${ids(negative)}`);
+    this.contactValues.overlap.hidden = !bridgedCoils.length;
+    setText(this.contactValues.overlap, bridgedCoils.length ? `두 편 동시 접촉 · 권선 ${bridgedCoils.map(id => id.at(-1).toUpperCase()).join('·')}` : '');
+  }
   highlight(id) {
+    if (id === this.highlightedPart) return;
+    this.highlightedPart = id;
     this.root.traverse(object => {
       if (!object.isMesh || !object.userData.partId || object.userData.nonPickable) return;
       object.material.emissive.set(object.userData.partId === id ? '#2b7582' : '#000000'); object.material.emissiveIntensity = object.userData.partId === id ? .4 : 0;
@@ -473,7 +565,9 @@ export class MotorScene {
       projected.push({ id, x: (p.x + 1) * width / 2, y: (1 - p.y) * height / 2 });
     }
     const sides = [[], []]; projected.sort((a, b) => a.x - b.x).forEach((item, i) => sides[i < Math.ceil(projected.length / 2) ? 0 : 1].push(item));
-    const top = Math.min(88, Math.max(65, height * .14)), bottom = Math.max(top + 25, height - 85), labelWidth = compact ? Math.min(118, width * .32) : 148;
+    const top = Math.min(88, Math.max(65, height * .14));
+    const footerSpace = this.inspection ? 70 : this.note.hidden ? 88 : compact ? 132 : 114;
+    const bottom = Math.max(top + 25, height - footerSpace), labelWidth = compact ? Math.min(118, width * .32) : 148;
     for (let side = 0; side < 2; side++) {
       const items = sides[side].sort((a, b) => a.y - b.y), spacing = Math.min(45, (bottom - top) / Math.max(1, items.length - 1)); let last = top - spacing;
       items.forEach((p, index) => {
@@ -555,7 +649,7 @@ export class MotorScene {
     const width = Math.max(...projected.map(p => p.x)) - Math.min(...projected.map(p => p.x));
     const height = Math.max(...projected.map(p => p.y)) - Math.min(...projected.map(p => p.y));
     this.camera.zoom = Math.min(4, Math.max(1, Math.min(1.6 / width, 1.5 / height)));
-    this.camera.updateProjectionMatrix(); this.contactReadout.hidden = true; this.render();
+    this.camera.updateProjectionMatrix(); this.render();
     return true;
   }
   endInspection() {
@@ -563,7 +657,7 @@ export class MotorScene {
     const saved = this.inspection.saved; this.inspection = null;
     this.applyView(); this.setCameraState(saved.camera);
     this.focusContext = saved.focusContext; this.focusIsPreset = saved.focusIsPreset;
-    this.contactReadout.hidden = !this.view.layers.contacts; this.render(); return true;
+    this.render(); return true;
   }
   getInspection() { return this.inspection ? { id: this.inspection.id } : null; }
   getProjectCameraState() { return this.inspection ? structuredClone(this.inspection.saved.camera) : this.getCameraState(); }

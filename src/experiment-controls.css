@@ -1,0 +1,46 @@
+.motor-settings {
+  margin-top: 18px;
+}
+
+.motor-settings fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.motor-settings legend {
+  padding: 0 5px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.motor-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.motor-inputs label,
+.motor-inputs span {
+  display: block;
+  font-size: 11px;
+}
+
+.motor-inputs input {
+  margin: 5px 0;
+  padding: 8px;
+}
+
+.motor-inputs span {
+  color: var(--muted);
+}
+
+.motor-settings .muted {
+  word-break: keep-all;
+}
+
+.motor-settings .wide {
+  margin-top: 2px;
+}
