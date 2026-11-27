@@ -70,8 +70,13 @@ jobs:
         run: |
           $taskVersion = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
           $taskInstaller = "release/windows/Motor-Lab-Setup-$taskVersion.exe"
-          $taskResult = pwsh -NoProfile -NonInteractive -File scripts/verify-signature.ps1 -Path $taskInstaller -ExpectedThumbprint ('0' * 40) 2>&1
-          if ($LASTEXITCODE -eq 0 -or ($taskResult -join ' ') -notmatch 'Expected a valid embedded Authenticode signature') {
+          $taskError = $null
+          try {
+            & './scripts/verify-signature.ps1' -Path $taskInstaller -ExpectedThumbprint ('0' * 40)
+          } catch {
+            $taskError = $_.Exception.Message
+          }
+          if ($taskError -notmatch 'Expected a valid embedded Authenticode signature') {
             throw 'The publisher gate did not reject the unsigned installer as expected.'
           }
       - name: Verify installer checksum and required documents
