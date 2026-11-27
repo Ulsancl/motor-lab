@@ -114,6 +114,7 @@ try {
   });
   await check('guide playback and explicit part focus return small-window users to the scene; notifications can be dismissed', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.controls .mobile-disclosure > summary').click();
     await page.locator('#new-project').click(); assert.equal(await page.locator('#toast').isVisible(), true);
     const untouched = (await current()).state; await page.getByRole('button', { name: '알림 닫기' }).click();
     assert.equal(await page.locator('#toast').isVisible(), false); assert.deepEqual((await current()).state, untouched);
@@ -122,6 +123,7 @@ try {
     await page.waitForFunction(() => { const rect = document.querySelector('#scene').getBoundingClientRect(); return rect.top >= -1 && rect.bottom <= innerHeight + 1; });
     await page.locator('#play').click(); await advance(30); assert.equal((await guide()).stage, 1); assert.equal(await page.locator('#guide-play').isVisible(), false);
     await page.locator('#guide-next').click(); assert.equal(await page.locator('#guide-play').isVisible(), true);
+    await page.locator('.inspector .mobile-disclosure > summary').click();
     await page.locator('#part-select').selectOption('terminal-negative'); const before = (await current()).state;
     await page.locator('#focus-part').click();
     await page.waitForFunction(() => { const rect = document.querySelector('#scene').getBoundingClientRect(); return rect.top >= -1 && rect.bottom <= innerHeight + 1; });
@@ -171,11 +173,62 @@ try {
     const downloading = other.waitForEvent('download'); await other.locator('#recover-original').click(); const download = await downloading; const filename = path.join(output, 'protected-original.txt'); await download.saveAs(filename); assert.equal(await fs.readFile(filename, 'utf8'), raw);
     await isolated.close(); await page.locator('#new-project').click();
   });
+  await check('500px touch view starts compact and keeps file actions and disclosures keyboard-accessible', async () => {
+    const touch = await browser.newContext({ viewport: { width: 500, height: 900 }, hasTouch: true, isMobile: true, acceptDownloads: true });
+    try {
+      const mobile = await touch.newPage(); watch(mobile);
+      await mobile.goto(page.url()); await mobile.waitForFunction(() => window.motorLab?.sceneDebug()?.ready);
+      const lessons = mobile.locator('.controls .mobile-disclosure > summary');
+      const parts = mobile.locator('.inspector .mobile-disclosure > summary');
+      assert.equal(await mobile.locator('.lesson-list').isVisible(), false);
+      assert.equal(await mobile.locator('#part-select').isVisible(), false);
+      assert.equal(await mobile.locator('.balance-cards').isVisible(), false);
+      assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth), 500);
+      await mobile.screenshot({ path: path.join(output, 'motor-500.png'), fullPage: true });
+
+      await lessons.focus(); await mobile.keyboard.press('Space');
+      assert.equal(await mobile.locator('.lesson-list').isVisible(), true);
+      assert.equal(await mobile.evaluate(() => window.motorLab.getState().running), false);
+      await mobile.locator('[data-lesson="startup"]').tap();
+      await lessons.press('Enter');
+      assert.match(await lessons.innerText(), /관찰 1 \/ 2/);
+      assert.equal(await mobile.locator('#guide-play').isVisible(), false);
+      await parts.tap();
+      assert.equal(await mobile.locator('#part-select').isVisible(), true);
+
+      const action = name => mobile.getByRole('button', { name, exact: true });
+      for (const name of ['새 실험', '실험 열기', '실험 저장', '사용 안내']) {
+        const box = await action(name).boundingBox();
+        assert.ok(box.width >= 44 && box.height >= 44 && box.x + box.width <= 500, name);
+      }
+      await action('사용 안내').press('Enter');
+      assert.equal(await mobile.getByRole('dialog', { name: 'Motor Lab 사용 안내' }).isVisible(), true);
+      await mobile.keyboard.press('Escape');
+      assert.equal(await mobile.locator('#open-help').evaluate(node => node === document.activeElement), true);
+      await action('사용 안내').tap();
+      await mobile.locator('#close-help').tap();
+      await mobile.locator('#step').tap();
+      const saved = await mobile.evaluate(() => window.motorLab.project());
+      const [download] = await Promise.all([mobile.waitForEvent('download'), action('실험 저장').tap()]);
+      await action('새 실험').tap();
+      assert.equal(await mobile.evaluate(() => window.motorLab.getState().state.timeS), 0);
+      const [chooser] = await Promise.all([mobile.waitForEvent('filechooser'), action('실험 열기').tap()]);
+      await chooser.setFiles(await download.path());
+      await mobile.waitForFunction(expected => window.motorLab.getState().state.timeS === expected, saved.state.timeS);
+      assert.deepEqual(await mobile.evaluate(() => window.motorLab.project()), saved);
+    } finally { await touch.close(); }
+  });
   await check('desktop and narrow views keep essential controls reachable with no horizontal overflow', async () => {
+    await page.bringToFront();
     for (const width of [1600, 1024, 390]) {
-      await page.setViewportSize({ width, height: width === 390 ? 844 : 1100 }); await page.locator('#reset-camera').click();
+      const narrow = width <= 700;
+      await page.setViewportSize({ width, height: narrow ? 844 : 1100 });
+      await page.waitForFunction(open => document.querySelector('.balance-observation').open === open, !narrow);
+      await page.locator('#reset-camera').click();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth); assert.ok(overflow <= 1, `horizontal overflow ${overflow} at ${width}`);
-      for (const id of ['voltage', 'load', 'apply-settings', 'play', 'step', 'save-project', 'part-select']) assert.ok(await page.locator(`#${id}`).isVisible());
+      for (const id of ['voltage', 'load', 'apply-settings', 'play', 'step', 'save-project']) assert.ok(await page.locator(`#${id}`).isVisible());
+      assert.equal(await page.locator('#part-select').isVisible(), !narrow);
+      assert.equal(await page.locator('.lesson-list').isVisible(), !narrow);
       await page.screenshot({ path: path.join(output, `motor-${width}.png`), fullPage: true });
     }
     await page.setViewportSize({ width: 1600, height: 1100 }); await page.locator('#reset-camera').click();

@@ -14,6 +14,7 @@ const center = range => (range[0] + range[1]) / 2;
 const length = range => range[1] - range[0];
 const shaftRpm = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 });
 const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+const STAGE_COLOR = '#182732';
 function polyline(points) {
   const path = new THREE.CurvePath();
   for (let i = 1; i < points.length; i++) if (V(points[i]).distanceToSquared(V(points[i - 1])) > 1e-24) path.add(new THREE.LineCurve3(V(points[i - 1]), V(points[i])));
@@ -35,7 +36,9 @@ export class MotorScene {
     this.container = container; this.onSelect = onSelect; this.onCameraChange = onCameraChange;
     this.view = structuredClone(DEFAULT_VIEW); this.components = new Map(); this.geometries = new Set(); this.materials = new Set(); this.textures = new Set();
     this.covers = []; this.explodedParts = []; this.segments = []; this.leadMeshes = []; this.arrowSets = []; this.bearings = []; this.instances = []; this.rotationIntegralRad = 0; this.disposed = false; this.updating = false;
-    this.scene = new THREE.Scene(); this.scene.background = new THREE.Color('#182732');
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(STAGE_COLOR);
+    this.scene.fog = new THREE.Fog(STAGE_COLOR, .48, 1.35);
     this.camera = new THREE.PerspectiveCamera(36, 1, .0005, 10);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.7)); this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -58,9 +61,11 @@ export class MotorScene {
     Object.assign(key.shadow.camera, { left: -.3, right: .3, top: .25, bottom: -.25, near: .05, far: 1.5 }); key.shadow.bias = -.0001; key.shadow.normalBias = .00015; this.scene.add(key);
     const rim = new THREE.DirectionalLight(0x8dcde8, 2.8); rim.position.set(.3, .3, -.45); this.scene.add(rim);
     this.root = new THREE.Group(); this.scene.add(this.root); this.rotor = new THREE.Group(); this.rotor.position.y = G.axisY; this.root.add(this.rotor);
-    this.createMaterials(); this.buildStator(); this.buildRotor(); this.buildContacts(); this.buildBench(); this.buildField(); this.buildOverlay();
+    this.createMaterials(); this.buildStator(); this.buildRotor(); this.buildContacts(); this.buildBench(); this.buildStage(); this.buildField(); this.buildOverlay();
     this.root.traverse(object => {
       if (!object.isMesh) return; let p = object;
+      // The stage fades into its backdrop without reducing part or path contrast.
+      object.material.fog = false;
       while (p && !p.userData.partId) p = p.parent;
       if (p) object.userData.partId = p.userData.partId;
     });
@@ -415,8 +420,37 @@ export class MotorScene {
       this.box([.018, .004, .060], m.steel, load, [x, .019, -.007]);
       for (const z of [-.031, .018]) this.bolt(load, [x, .022, z], 'y');
     }
-    const groundMaterial = this.material({ color: '#203743', metalness: .12, roughness: .78 });
-    this.ground = this.mesh(new THREE.PlaneGeometry(3, 3), groundMaterial, this.scene, [0, -.001, 0]); this.ground.rotation.x = -Math.PI / 2; this.ground.castShadow = false;
+  }
+  radialTexture(stops) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    const context = canvas.getContext('2d');
+    const gradient = context.createRadialGradient(128, 128, 0, 128, 128, 128);
+    for (const [offset, color] of stops) gradient.addColorStop(offset, color);
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 256, 256);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.textures.add(texture);
+    return texture;
+  }
+  buildStage() {
+    this.stage = new THREE.Group();
+    this.scene.add(this.stage);
+
+    const floorMap = this.radialTexture([[0, '#1e303c'], [.22, '#182832'], [.5, '#101b24'], [1, '#101b24']]);
+    const floorMaterial = this.material({ map: floorMap, roughness: .92, side: THREE.FrontSide });
+    const floor = this.mesh(new THREE.PlaneGeometry(3, 3), floorMaterial, this.stage, [0, -.001, 0]);
+    floor.rotation.x = -Math.PI / 2;
+    floor.castShadow = false;
+
+    const shadowMap = this.radialTexture([[0, 'rgba(0,0,0,.65)'], [.55, 'rgba(0,0,0,.45)'], [1, 'rgba(0,0,0,0)']]);
+    const shadowMaterial = new THREE.MeshBasicMaterial({ map: shadowMap, transparent: true, depthWrite: false });
+    const shadow = this.mesh(new THREE.PlaneGeometry(.38, .21), shadowMaterial, this.stage, [.004, -.0008, -.005]);
+    shadowMaterial.dispose();
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.castShadow = false;
+    shadow.receiveShadow = false;
   }
   buildField() {
     this.field = new THREE.Group(); this.root.add(this.field);
@@ -477,7 +511,7 @@ export class MotorScene {
       }
       this.inspection.position = position;
     }
-    if (this.ground) this.ground.visible = !this.inspection;
+    this.stage.visible = !this.inspection;
     this.observation.hidden = !this.snapshot || !!this.inspection;
     this.contactReadout.hidden = !this.view.layers.contacts;
     const notes = this.inspection ? [`${cut ? '궤도 반절개 · 볼·케이지 전체 유지 · ' : ''}대표 베어링 · 외륜 고정·접촉각 0° · 줄무늬는 자전 관찰 표시`] : [];

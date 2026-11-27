@@ -30,6 +30,26 @@ function toast(message) {
   clearTimeout(toastTimer); toastTimer = setTimeout(dismissToast, 5000);
 }
 function returnToScene() { dismissToast(); requestAnimationFrame(() => $('#scene').scrollIntoView({ block: 'nearest', inline: 'nearest' })); }
+const mobileLayout = matchMedia('(max-width: 700px)');
+for (const disclosure of $$('[data-mobile-disclosure], .balance-observation')) {
+  let desktopOpen = disclosure.open;
+  let mobileOpen = false;
+  let wasMobile = mobileLayout.matches;
+  if (wasMobile) disclosure.open = mobileOpen;
+  window.addEventListener('resize', () => {
+    const isMobile = mobileLayout.matches;
+    if (isMobile === wasMobile) return;
+    wasMobile = isMobile;
+    if (isMobile) {
+      desktopOpen = disclosure.open;
+      if (!mobileOpen && disclosure.contains(document.activeElement)) disclosure.querySelector('summary').focus();
+      disclosure.open = mobileOpen;
+    } else {
+      mobileOpen = disclosure.open;
+      disclosure.open = desktopOpen;
+    }
+  });
+}
 function capture() { return createProject({ state, trace, comparison, playbackRate, view, camera: scene?.getProjectCameraState?.() ?? scene?.getCameraState() ?? initialCamera }); }
 function saveLocal() {
   clearTimeout(saveTimer); if (storageBlocked || restoring) return;
@@ -172,9 +192,12 @@ function guideNext() {
 }
 function renderGuide() {
   $('#lesson-guide').hidden = !guide; $('#guide-next').hidden = true;
+  $('#guide-summary-progress').hidden = !guide;
   $('#guide-play').hidden = !guide || guide.status !== 'active' || guide.stage === 1; if (!guide) return;
   const lesson = lessonInfo[guide.id]; text('#guide-title', lesson.title);
-  text('#guide-progress', guide.status === 'completed' ? '관찰 완료' : guide.status === 'interrupted' ? '직접 조절 중' : `관찰 ${guide.stage < 2 ? 1 : 2} / ${guide.id === 'locked' ? 1 : 2}`);
+  const progress = guide.status === 'completed' ? '관찰 완료' : guide.status === 'interrupted' ? '직접 조절 중' : `관찰 ${guide.stage < 2 ? 1 : 2} / ${guide.id === 'locked' ? 1 : 2}`;
+  text('#guide-progress', progress);
+  if ($('#guide-summary-progress').textContent !== progress) text('#guide-summary-progress', progress);
   let action = '', result = '';
   if (guide.status === 'interrupted') action = guide.notice;
   else if (guide.status === 'completed') {
@@ -260,6 +283,12 @@ async function openFile() {
   catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { setBusy(false); }
 }
 function toggleFocus() { focused = !focused; document.body.classList.toggle('focus-mode', focused); text('#focus', focused ? '실험 화면으로' : '3D 크게 보기'); returnToScene(); }
+function showHelp() {
+  const dialog = $('#help-dialog');
+  if (busy || dialog.open) return;
+  stop();
+  dialog.showModal();
+}
 
 for (const selector of ['#part-select', '#focus-part-select']) $(selector).replaceChildren(...COMPONENTS.map(part => Object.assign(document.createElement('option'), { value: part.id, textContent: part.name })));
 try {
@@ -302,8 +331,9 @@ $('#plot-window').addEventListener('change', () => refresh(false)); $('#pin-comp
 $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
 $('#project-file').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file || busy) return; stop(); setBusy(true); try { if (file.size > 10 * 1024 * 1024) throw new Error('실험 파일은 10 MiB 이하여야 합니다.'); const saved = parseProject(await file.text()); remember(); readProject(saved); toast('저장한 실험을 일시정지 상태로 복원했습니다.'); } catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { event.target.value = ''; setBusy(false); } });
 $('#recover-original').addEventListener('click', () => { if (recoveredRaw !== null) browserDownload(recoveredRaw, 'motor-lab-original.txt', 'text/plain;charset=utf-8'); });
+$('#open-help').addEventListener('click', showHelp);
 $('#close-help').addEventListener('click', () => $('#help-dialog').close());
-desktop?.onCommand(command => { if (busy) return; if (command === 'new-project') newExperiment(); else if (command === 'open-project') openFile(); else if (command === 'save-project') saveFile(); else if (command === 'toggle-running') toggle(); else if (command === 'focus') toggleFocus(); else if (command === 'help') { stop(); $('#help-dialog').showModal(); } });
+desktop?.onCommand(command => { if (busy) return; if (command === 'new-project') newExperiment(); else if (command === 'open-project') openFile(); else if (command === 'save-project') saveFile(); else if (command === 'toggle-running') toggle(); else if (command === 'focus') toggleFocus(); else if (command === 'help') showHelp(); });
 window.addEventListener('keydown', event => { if (event.code !== 'Space' || event.repeat || event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.target.isContentEditable || event.target.closest('input,select,textarea,button,summary,dialog,[contenteditable=true]')) return; event.preventDefault(); toggle(); });
 window.addEventListener('beforeunload', saveLocal); document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); saveLocal(); } });
 window.motorLab = {

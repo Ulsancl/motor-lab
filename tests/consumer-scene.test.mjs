@@ -92,6 +92,7 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.deepEqual((await debug()).camera, camera);
+    await page.locator('.inspector .mobile-disclosure > summary').click();
     for (const id of ['terminal-negative', 'segment-2', 'brush-negative']) {
       const before = (await debug()).camera; await choose(id); assert.deepEqual((await debug()).camera, before);
       await page.locator('#focus-part').click(); await selectedLabel(id); await capture(`narrow-${id}`);

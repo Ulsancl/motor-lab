@@ -5,11 +5,11 @@
 .motor-label-lines { position:absolute; inset:0; width:100%; height:100%; overflow:hidden; }
 .motor-label-lines path { fill:none; stroke:#a9bec6; stroke-width:1; opacity:.58; }
 .motor-label-lines path.is-selected { stroke:#7be1d3; opacity:.95; stroke-width:1.5; }
-.motor-part-label { position:absolute; pointer-events:auto; min-height:30px; padding:6px 8px; border:1px solid #78939f70; border-radius:5px; background:#14232bea; color:#e1eaed; font:500 11px/1.35 system-ui,sans-serif; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 8px #0003; cursor:pointer; }
+.motor-part-label { position:absolute; pointer-events:auto; min-height:30px; padding:6px 8px; border:1px solid #78939f70; border-radius:5px; background:#14232bea; color:#e1eaed; font-size:11px; font-weight:500; line-height:1.35; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 8px #0003; cursor:pointer; }
 .motor-part-label:hover,.motor-part-label:focus-visible { color:#fff; border-color:#7be1d3; background:#21434a; }
 .motor-part-label.is-selected { border-color:#79d4cc; background:#1a4850ef; color:#eafffc; }
 .motor-part-label[hidden],.motor-scene-status [hidden] { display:none; }
-.motor-scene-status { position:absolute; right:12px; bottom:12px; left:12px; display:grid; justify-items:end; gap:5px; color:#dbe9e7; font:500 11px/1.45 system-ui,sans-serif; }
+.motor-scene-status { position:absolute; right:12px; bottom:12px; left:12px; display:grid; justify-items:end; gap:5px; color:#dbe9e7; font-size:11px; font-weight:500; line-height:1.45; }
 .motor-scene-observation { max-width:100%; padding:7px 10px; border:1px solid #5a777b; border-radius:5px; background:#142731f5; font-variant-numeric:tabular-nums; }
 .motor-operating-readout,.motor-contact-readout { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 12px; }
 .motor-operating-readout > span,.motor-contact-readout > span { white-space:nowrap; }
