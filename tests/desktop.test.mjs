@@ -1,11 +1,14 @@
 import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { flipFuses, getCurrentFuseWire, FuseV1Options, FuseVersion } from '@electron/fuses';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { _electron as electron } from 'playwright';
+import { _electron as electron, chromium } from 'playwright';
 import { createExperiment, reconfigureExperiment, step } from '../src/model.js';
 import { createProject, snapshotTrace } from '../src/project.js';
 
@@ -16,6 +19,8 @@ const packaged = !!process.env.MOTOR_DESKTOP_EXE;
 const executablePath = packaged ? process.env.MOTOR_DESKTOP_EXE : require('electron');
 assert.ok(path.isAbsolute(executablePath), 'The tested executable must be an absolute path');
 const output = artifactDirectory(root, path.join(root, 'output', `${packaged ? 'desktop-packaged' : 'desktop'}-v${expectedVersion}`));
+const testBundle = path.join(path.dirname(output), 'playwright-app');
+const testExecutable = packaged ? path.join(testBundle, path.basename(executablePath)) : executablePath;
 await fs.mkdir(output, { recursive: true });
 const profile = await fs.mkdtemp(path.join(output, 'profile-'));
 const evidence = path.join(profile, 'test-artifacts');
@@ -51,7 +56,7 @@ function sameProject(actual, expected) {
   }
 }
 async function launch() {
-  app = await electron.launch({ executablePath, args: packaged ? [] : [root], env, timeout: 45000 });
+  app = await electron.launch({ executablePath: testExecutable, args: packaged ? [] : [root], env, timeout: 45000 });
   const child = app.process(), processRecord = { pid: child.pid, exited: false };
   processes.push(processRecord);
   child.once('exit', (code, signal) => Object.assign(processRecord, { exited: true, code, signal }));
@@ -104,7 +109,51 @@ async function stableBounds(label) {
   return actual;
 }
 
+async function smokePackagedExecutable() {
+  const profile = path.join(output, 'hardened-profile');
+  const child = spawn(executablePath, ['--remote-debugging-port=0'], {
+    env: { ...env, MOTOR_LAB_DATA_DIR: profile }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+  });
+  const exited = once(child, 'exit');
+  let log = '', endpoint, browser;
+  child.stderr.setEncoding('utf8').on('data', chunk => {
+    log = (log + chunk).slice(-8192);
+    endpoint ??= /^DevTools listening on (ws:\/\/127\.0\.0\.1:[^\r\n]+)$/m.exec(log)?.[1].trim();
+  });
+  try {
+    await Promise.race([exited.then(() => { throw new Error('Packaged app exited: ' + log); }),
+      waitFor(() => endpoint, 'hardened executable DevTools endpoint')]);
+    browser = await chromium.connectOverCDP(endpoint, { timeout: 15000 });
+    const context = browser.contexts()[0];
+    const window = context.pages()[0] ?? await context.waitForEvent('page', { timeout: 15000 });
+    await window.waitForFunction(() => window.motorLab?.sceneDebug()?.ready, undefined, { timeout: 15000 });
+    assert.equal(window.url(), 'app://motor/');
+    assert.equal(await window.evaluate(() => window.motorDesktop.isDesktop), true);
+  } finally {
+    await browser?.close().catch(() => {});
+    child.kill();
+    await exited;
+  }
+}
+
 try {
+  if (packaged) {
+    await check('untouched packaged executable enforces five fuses and starts the app', async () => {
+      const fuses = await getCurrentFuseWire(executablePath);
+      assert.equal(fuses.version, FuseVersion.V1);
+      for (const fuse of [FuseV1Options.RunAsNode, FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseV1Options.EnableNodeCliInspectArguments]) {
+        assert.equal(fuses[fuse], '0'.charCodeAt(0), FuseV1Options[fuse]);
+      }
+      for (const fuse of [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseV1Options.OnlyLoadAppFromAsar]) {
+        assert.equal(fuses[fuse], '1'.charCodeAt(0), FuseV1Options[fuse]);
+      }
+      await smokePackagedExecutable();
+    });
+    // Playwright uses the main-process inspector to mock native dialogs.
+    // Enable it on an isolated copy while keeping the other package fuses.
+    await fs.cp(path.dirname(executablePath), testBundle, { recursive: true });
+    await flipFuses(testExecutable, { version: FuseVersion.V1, [FuseV1Options.EnableNodeCliInspectArguments]: true });
+  }
   await launch();
   await check('isolated Motor Lab identity, offline bundle, sandbox and native bridge', async () => {
     assert.equal(page.url(), 'app://motor/');
@@ -117,7 +166,7 @@ try {
       sandbox: true, contextIsolation: true, nodeIntegration: false });
     const bridge = await page.evaluate(() => ({ keys: Object.keys(window.motorDesktop).sort(), native: window.motorDesktop.isDesktop,
       node: typeof window.require, process: typeof window.process, others: [typeof window.hydraulicDesktop, typeof window.engineDesktop, typeof window.brakeDesktop] }));
-    assert.deepEqual(bridge, { keys: ['isDesktop', 'onCommand', 'openProject', 'saveProject', 'setBusy'],
+    assert.deepEqual(bridge, { keys: ['exportOriginal', 'isDesktop', 'onCommand', 'openProject', 'saveProject', 'setBusy'],
       native: true, node: 'undefined', process: 'undefined', others: ['undefined', 'undefined', 'undefined'] });
     assert.deepEqual(errors, []); assert.deepEqual(remoteRequests, []);
     const access = await page.evaluate(async () => ({
@@ -323,7 +372,11 @@ try {
     windowRestoration = { display, gridStep, requested };
     await app.evaluate(({ BrowserWindow }, target) => BrowserWindow.getAllWindows()[0].setBounds(target), requested);
     const aligned = await stableBounds('aligned native rectangle'); windowRestoration.aligned = aligned;
-    assert.deepEqual(aligned, requested);
+    // Windows can round even a grid-aligned requested rectangle to physical
+    // pixels. Persistence below must reproduce the actual rectangle exactly.
+    for (const key of ['x', 'y', 'width', 'height']) {
+      assert.ok(Math.abs(aligned[key] - requested[key]) <= 1, `Window alignment changed ${key}`);
+    }
     await page.reload(); await page.waitForFunction(() => window.motorLab?.project && document.querySelector('#scene canvas'));
     sameProject(await project(), saved); assert.deepEqual(await stableBounds('reloaded native rectangle'), aligned);
     await closeNormally();
@@ -358,14 +411,17 @@ try {
     await page.reload();
     await page.waitForFunction(() => window.motorLab?.project && !document.querySelector('#storage-recovery').hidden);
     const target = path.join(evidence, 'recovered-original.txt');
-    await app.evaluate(({ session }, filename) => {
-      globalThis.motorDownload = null;
-      session.defaultSession.once('will-download', (_event, item) => {
-        item.setSavePath(filename); item.once('done', (_event, status) => { globalThis.motorDownload = status; });
-      });
-    }, target);
+    await saveDialog(target, true);
     await page.locator('#recover-original').click();
-    await waitFor(() => app.evaluate(() => globalThis.motorDownload === 'completed'), 'native original download');
+    await waitFor(() => app.evaluate(() => globalThis.motorSaveCalls === 1), 'native original export cancellation');
+    await waitFor(async () => !await page.locator('#save-project').isDisabled(), 'recovery dialog closes');
+    await assert.rejects(fs.access(target), { code: 'ENOENT' });
+    const otherExtension = path.join(evidence, 'recovered-original.dat');
+    await saveDialog(otherExtension);
+    await freshToast(() => page.locator('#recover-original').click(), 'txt');
+    await assert.rejects(fs.access(otherExtension), { code: 'ENOENT' });
+    await saveDialog(target);
+    await freshToast(() => page.locator('#recover-original').click(), '텍스트 파일로 저장');
     assert.equal(await fs.readFile(target, 'utf8'), raw);
     assert.ok(await page.evaluate(value => Object.keys(localStorage).some(key => key.startsWith('motor-lab-project-v1-original-') && localStorage.getItem(key) === value), raw));
   });
@@ -382,6 +438,7 @@ try {
     await page?.evaluate(() => window.motorDesktop?.setBusy(false)).catch(() => {});
     await closeNormally().catch(error => { failure ??= error; process.exitCode = 1; });
   }
+  if (packaged) await fs.rm(testBundle, { recursive: true, force: true });
   await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ status: failure ? 'FAILED' : 'PASSED', version: expectedVersion,
     packaged, executablePath, profile, evidence, checks, errors, remoteRequests, processes, windowRestoration, gpu,
     ...(failure ? { failure: failure.message } : {}) }, null, 2));

@@ -1,13 +1,13 @@
 import { MODEL_VERSION, normalizeSettings, createExperiment, instantSnapshot, assertValidState, validLockedCurrent,
   MOTOR_CONSTANTS_SI, SETTINGS_LIMITS_SI, stateMotionLimits } from './model.js';
 import { DEFAULT_VIEW, COMPONENTS } from './geometry.js';
+import { MAX_TRACE_SAMPLES, isProjectTextTooLarge, withinProjectStructure } from './project-input.js';
 
 export { DEFAULT_VIEW };
 export const projectType = 'motor-lab-project';
 export const projectVersion = 1;
 export const projectModelVersion = MODEL_VERSION;
-export const MAX_TRACE_SAMPLES = 1000;
-const MAX_BYTES = 10 * 1024 * 1024;
+export { MAX_TRACE_SAMPLES };
 const layerKeys = ['housing', 'magnets', 'windings', 'contacts', 'field'];
 const modes = ['assembled', 'cutaway', 'exploded'];
 const partIds = new Set(COMPONENTS.map(part => part.id));
@@ -154,9 +154,13 @@ export function createProject(input = {}) {
 }
 export function parseProject(text) {
   if (typeof text !== 'string') fail('실험 파일은 JSON 텍스트여야 합니다.', 'INVALID_JSON');
-  if (text.length > MAX_BYTES || new TextEncoder().encode(text).byteLength > MAX_BYTES) fail('실험 파일은 10 MiB 이하여야 합니다.', 'PROJECT_TOO_LARGE');
+  if (isProjectTextTooLarge(text)) fail('실험 파일은 10 MiB 이하여야 합니다.', 'PROJECT_TOO_LARGE');
+  const json = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const structure = withinProjectStructure(json);
+  if (structure === false) fail('실험 파일의 구조가 허용 범위를 넘었습니다.', 'PROJECT_STRUCTURE_LIMIT');
+  if (structure === null) fail('JSON 실험 파일을 읽을 수 없습니다.', 'INVALID_JSON');
   let value;
-  try { value = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text); }
+  try { value = JSON.parse(json); }
   catch { fail('JSON 실험 파일을 읽을 수 없습니다.', 'INVALID_JSON'); }
   return validateProject(value);
 }

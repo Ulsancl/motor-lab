@@ -3,10 +3,17 @@
   "productName": "Motor Lab",
   "copyright": "Motor Lab",
   "asar": true,
+  "electronFuses": {
+    "runAsNode": false,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "onlyLoadAppFromAsar": true,
+    "enableEmbeddedAsarIntegrityValidation": true
+  },
   "publish": null,
   "electronDist": "node_modules/electron/dist",
   "directories": { "output": "release/windows", "buildResources": "desktop/assets" },
-  "files": ["desktop/**/*.cjs", "desktop/assets/app.ico", "src/project.js", "src/model.js", "src/geometry.js", "dist/**/*", "package.json"],
+  "files": ["desktop/**/*.cjs", "desktop/assets/app.ico", "src/project.js", "src/project-input.js", "src/model.js", "src/geometry.js", "dist/**/*", "package.json"],
   "extraResources": [
     { "from": "LICENSE.txt", "to": "LICENSE.txt" },
     { "from": "docs", "to": "docs", "filter": ["*.md"] },

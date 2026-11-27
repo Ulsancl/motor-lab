@@ -1,4 +1,5 @@
 import { archiveOriginal } from './recovery.js';
+import { MAX_PROJECT_BYTES } from './project-input.js';
 import './style.css';
 import './experiment-controls.css';
 import './detail.css';
@@ -107,8 +108,8 @@ function motorSettings(resistanceOhm, inertiaKgM2) {
   return settings;
 }
 function remember() { previous = { project: capture(), guide: structuredClone(guide), inputChangedAt }; $('#undo-new').hidden = false; }
-function readProject(project, restoredGuide = null) {
-  const saved = parseProject(serializeProject(project)); restoring = true;
+function readProject(saved, restoredGuide = null) {
+  restoring = true;
   try {
     scene?.endInspection?.(); stop(); ({ state, trace, comparison } = saved); ({ view, playbackRate, camera: initialCamera } = saved.observation); inputChangedAt = state.timeS;
     snapshot = instantSnapshot(state); scene?.resetRotation(state.angleRad); guide = restoredGuide; syncControls(true); syncMotorControls(); refresh(true);
@@ -279,7 +280,7 @@ async function saveFile() {
 }
 async function openFile() {
   if (busy) return; stop(); if (!desktop) { $('#project-file').click(); return; } setBusy(true);
-  try { const result = await desktop.openProject(); if (result.canceled) { toast('열기를 취소했습니다. 현재 실험은 그대로 유지합니다.'); return; } const saved = parseProject(result.content); remember(); readProject(saved); toast('저장한 실험을 일시정지 상태로 복원했습니다.'); }
+  try { const result = await desktop.openProject(); if (result.canceled) { toast('열기를 취소했습니다. 현재 실험은 그대로 유지합니다.'); return; } remember(); readProject(result.project); toast('저장한 실험을 일시정지 상태로 복원했습니다.'); }
   catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { setBusy(false); }
 }
 function toggleFocus() { focused = !focused; document.body.classList.toggle('focus-mode', focused); text('#focus', focused ? '실험 화면으로' : '3D 크게 보기'); returnToScene(); }
@@ -329,8 +330,17 @@ for (const selector of ['#focus-part', '#focus-part-inline']) $(selector).addEve
 $$('[data-camera]').forEach(button => button.addEventListener('click', () => { scene?.endInspection?.(); scene?.resetCamera(button.dataset.camera); refresh(false); })); $('#focus').addEventListener('click', toggleFocus);
 $('#plot-window').addEventListener('change', () => refresh(false)); $('#pin-comparison').addEventListener('click', () => pinComparison()); $('#clear-comparison').addEventListener('click', () => { comparison = null; refresh(false); scheduleSave(); });
 $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
-$('#project-file').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file || busy) return; stop(); setBusy(true); try { if (file.size > 10 * 1024 * 1024) throw new Error('실험 파일은 10 MiB 이하여야 합니다.'); const saved = parseProject(await file.text()); remember(); readProject(saved); toast('저장한 실험을 일시정지 상태로 복원했습니다.'); } catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { event.target.value = ''; setBusy(false); } });
-$('#recover-original').addEventListener('click', () => { if (recoveredRaw !== null) browserDownload(recoveredRaw, 'motor-lab-original.txt', 'text/plain;charset=utf-8'); });
+$('#project-file').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file || busy) return; stop(); setBusy(true); try { if (file.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 10 MiB 이하여야 합니다.'); const saved = parseProject(await file.slice(0, MAX_PROJECT_BYTES + 1).text()); remember(); readProject(saved); toast('저장한 실험을 일시정지 상태로 복원했습니다.'); } catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { event.target.value = ''; setBusy(false); } });
+$('#recover-original').addEventListener('click', async () => {
+  if (recoveredRaw === null || busy) return;
+  if (!desktop) { browserDownload(recoveredRaw, 'motor-lab-original.txt', 'text/plain;charset=utf-8'); return; }
+  setBusy(true);
+  try {
+    const result = await desktop.exportOriginal(recoveredRaw);
+    if (!result.canceled) toast('보호된 원문을 텍스트 파일로 저장했습니다.');
+  } catch (error) { toast(`내보내지 못했습니다. ${error.message}`); }
+  finally { setBusy(false); }
+});
 $('#open-help').addEventListener('click', showHelp);
 $('#close-help').addEventListener('click', () => $('#help-dialog').close());
 desktop?.onCommand(command => { if (busy) return; if (command === 'new-project') newExperiment(); else if (command === 'open-project') openFile(); else if (command === 'save-project') saveFile(); else if (command === 'toggle-running') toggle(); else if (command === 'focus') toggleFocus(); else if (command === 'help') showHelp(); });

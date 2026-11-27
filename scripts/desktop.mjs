@@ -9,7 +9,14 @@ import { createHash } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mode = process.argv[2];
-if (!['start', 'package', 'prepare-test'].includes(mode)) throw new Error('Use start, package or prepare-test');
+if (!['start', 'package', 'package-signed', 'prepare-test'].includes(mode)) {
+  throw new Error('Use start, package, package-signed or prepare-test');
+}
+const signed = mode === 'package-signed';
+const signer = process.env.MOTOR_SIGNER_THUMBPRINT ?? '';
+if (signed && (process.platform !== 'win32' || !/^[a-f0-9]{40}$/i.test(signer))) {
+  throw new Error('Signed packaging requires Windows and MOTOR_SIGNER_THUMBPRINT (40 hex digits).');
+}
 if (mode === 'prepare-test' && process.env.MOTOR_DESKTOP_EXE) process.exit(0);
 const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 function run(executable, args) {
@@ -22,13 +29,13 @@ function run(executable, args) {
 for (const input of ['src', 'public', 'desktop', 'docs', 'node_modules/electron']) checkTree(root, path.join(root, input));
 const electronPackage = path.dirname(require.resolve('electron/package.json'));
 await run(process.execPath, [path.join(electronPackage, 'install.js')]);
-await run(process.execPath, [path.join(root, 'scripts', 'clean-dist.mjs')]);
-await run(process.execPath, [path.join(path.dirname(require.resolve('vite/package.json')), 'bin', 'vite.js'), 'build']);
+await run(process.execPath, [path.join(root, 'scripts', 'build-web.mjs')]);
 if (mode === 'start') await run(require('electron'), [root]);
-else if (mode === 'package') {
+else if (mode === 'package' || signed) {
   const stage = stagingDirectory(root), app = path.join(stage, 'app'), output = path.join(stage, 'windows');
   const configuration = JSON.parse(readInput(root, path.join(root, 'electron-builder.json')));
   const packageInfo = JSON.parse(readInput(root, path.join(root, 'package.json')));
+  const installerName = `Motor-Lab-Setup-${packageInfo.version}.exe`;
   try {
     const inputs = [...new Set(['desktop', 'dist', 'package.json', configuration.directories.buildResources, ...configuration.files.filter(file => !file.includes('*')), ...configuration.extraResources.map(item => item.from)])];
     for (const input of inputs.filter(file => !inputs.some(parent => file !== parent && file.startsWith(parent + '/')))) {
@@ -40,11 +47,17 @@ else if (mode === 'package') {
     const electronDist = checkedPath(root, path.join(root, 'node_modules', 'electron', 'dist'));
     checkTree(root, electronDist);
     await run(process.execPath, [path.join(path.dirname(require.resolve('electron-builder/package.json')), 'cli.js'),
-    '--win', 'nsis', '--x64', '--config', path.join(root, 'electron-builder.json'), '--projectDir', app, `--config.electronDist=${electronDist}`, `--config.directories.output=${output}`, '--config.npmRebuild=false', '--publish', 'never']);
+    '--win', 'nsis', '--x64', '--config', path.join(root, 'electron-builder.json'), '--projectDir', app, `--config.electronDist=${electronDist}`, `--config.directories.output=${output}`, '--config.npmRebuild=false', ...(signed ? ['--config.forceCodeSigning=true'] : []), '--publish', 'never']);
+    if (signed) {
+      const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      for (const binary of [installerName, path.join('win-unpacked', 'Motor Lab.exe')]) {
+        await run(powershell, ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'scripts', 'verify-signature.ps1'),
+          '-Path', checkedPath(root, path.join(output, binary)), '-ExpectedThumbprint', signer]);
+      }
+    }
+    const installer = path.join(output, installerName);
+    writeArtifact(root, installer + '.sha256', `${createHash('sha256').update(readInput(root, installer)).digest('hex')}  ${installerName}\n`);
     publishDirectory(root, output, path.join(root, 'release', 'windows'));
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
-  const { version } = packageInfo;
-  const file = path.join(root, 'release', 'windows', `Motor-Lab-Setup-${version}.exe`);
-  writeArtifact(root, file + '.sha256', `${createHash('sha256').update(readInput(root, file)).digest('hex')}  ${path.basename(file)}\n`);
-  console.log(`Installer: ${file}`);
+  console.log(`Installer: ${path.join(root, 'release', 'windows', installerName)}`);
 }

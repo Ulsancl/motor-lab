@@ -19,7 +19,7 @@ async function atomicWriteProject(target, contents, {
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   let ownsTemporary = false;
   try {
-    const handle = await operations.open(temporary, 'wx');
+    const handle = await operations.open(temporary, 'wx', 0o600);
     ownsTemporary = true;
     try { await handle.writeFile(contents, 'utf8'); await handle.sync(); }
     finally { await handle.close(); }

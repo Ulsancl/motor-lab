@@ -66,6 +66,14 @@ jobs:
           $env:MOTOR_DESKTOP_EXE = Join-Path $env:GITHUB_WORKSPACE 'release/windows/win-unpacked/Motor Lab.exe'
           node tests/desktop.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify publisher gate rejects unsigned CI installer
+        run: |
+          $taskVersion = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
+          $taskInstaller = "release/windows/Motor-Lab-Setup-$taskVersion.exe"
+          $taskResult = pwsh -NoProfile -NonInteractive -File scripts/verify-signature.ps1 -Path $taskInstaller -ExpectedThumbprint ('0' * 40) 2>&1
+          if ($LASTEXITCODE -eq 0 -or ($taskResult -join ' ') -notmatch 'Expected a valid embedded Authenticode signature') {
+            throw 'The publisher gate did not reject the unsigned installer as expected.'
+          }
       - name: Verify installer checksum and required documents
         run: |
           $taskVersion = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
